@@ -28,18 +28,46 @@ function resolveAsset(r) { if (!r) return null; const k = ALIAS[r.toLowerCase().
 function botH(env) { return { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`, "Content-Type": "application/json" }; }
 function jH() { return { "Content-Type": "application/json" }; }
 function wh(a, t) { return `${API}/webhooks/${a}/${t}`; }
+const ASSET_CHOICES = Object.entries(ASSETS).map(([k, A]) => ({ name: `${A.icon} ${A.ar}`, value: k.toLowerCase() }));
 
 /* ═══════════════════════════════════════════════════════════ */
 export default {
   async fetch(request, env, ctx) {
     const u = new URL(request.url);
+
+    /* ─── Debug ─── */
     if (u.searchParams.get("debug") === "1") {
       const c = { PK: !!env.DISCORD_PUBLIC_KEY, BT: !!env.DISCORD_BOT_TOKEN, AI: !!env.DISCORD_APP_ID, KV: !!env.DISCORD_KV };
       try { await env.DISCORD_KV.put("_t","1"); await env.DISCORD_KV.delete("_t"); c.KV_OK = true; } catch(e) { c.KV_OK = false; c.ERR = e.message; }
       return new Response(JSON.stringify(c,null,2), { headers:{"Content-Type":"application/json"} });
     }
+
+    /* ─── Debug Alerts ─── */
+    if (u.searchParams.get("alerts") === "1") {
+      try {
+        const users = await getUsers(env);
+        const out = { users_count: users.length, users: [] };
+        for (const uid of users) {
+          const alerts = await getAlerts(env, uid);
+          out.users.push({ id: uid, alerts: alerts.length, items: alerts });
+        }
+        return new Response(JSON.stringify(out, null, 2), { headers:{"Content-Type":"application/json"} });
+      } catch(e) { return new Response(JSON.stringify({ error: e.message }), { headers:{"Content-Type":"application/json"} }); }
+    }
+
+    /* ─── Test Alert ─── */
+    if (u.searchParams.get("testdm") === "1") {
+      try {
+        const uid = u.searchParams.get("uid");
+        if (!uid) return new Response("أضف ?uid=YOUR_DISCORD_ID", { headers:{"Content-Type":"text/plain"} });
+        await sendDM(env, uid, { title: "🔔 اختبار تنبيه", color: 0x00D278, description: "البوت يعمل بشكل صحيح!\nستصلك التنبيهات فور وصول السعر.", footer: { text: fmtTs() }, timestamp: new Date().toISOString() });
+        return new Response("✅ تم إرسال رسالة اختبار", { headers:{"Content-Type":"text/plain"} });
+      } catch(e) { return new Response(`❌ ${e.message}`, { headers:{"Content-Type":"text/plain"} }); }
+    }
+
     if (u.searchParams.get("register") === "1") return registerCmds(env);
     if (request.method !== "POST") return new Response("Alerts Bot");
+
     try {
       const buf = await request.arrayBuffer();
       const txt = new TextDecoder().decode(buf);
@@ -71,26 +99,64 @@ export default {
     }
   },
 
-  async scheduled(_, env) {
-    const data = await fetchAll();
-    for (const uid of await getUsers(env)) {
-      const alerts = await getAlerts(env, uid);
-      if (!alerts.length) continue;
-      const fired = [];
-      for (const a of alerts) {
-        const cur = data[a.key]?.price;
-        if (!cur) continue;
-        if ((a.cond === ">" && cur >= a.price) || (a.cond === "<" && cur <= a.price)) {
-          try { await sendDM(env, uid, alertEmbed(ASSETS[a.key], a, cur)); fired.push(a.id); } catch (e) { console.error("alert:", e.message); }
+  /* ═══════════════════ CRON — كل دقيقة ════════════════════ */
+  async scheduled(event, env) {
+    console.log("=== CRON START ===");
+
+    if (!env.DISCORD_BOT_TOKEN) {
+      console.error("BOT_TOKEN missing — alerts cannot send DMs");
+      return;
+    }
+    if (!env.DISCORD_KV) {
+      console.error("DISCORD_KV not bound");
+      return;
+    }
+
+    try {
+      const data = await fetchAll();
+      const users = await getUsers(env);
+      console.log(`Users: ${users.length}`);
+
+      for (const uid of users) {
+        const alerts = await getAlerts(env, uid);
+        if (!alerts.length) continue;
+        console.log(`User ${uid}: ${alerts.length} alerts`);
+
+        const fired = [];
+        for (const a of alerts) {
+          const cur = data[a.key]?.price;
+          if (!cur) { console.log(`  ${a.key}: no price`); continue; }
+
+          const hit = (a.cond === ">" && cur >= a.price) || (a.cond === "<" && cur <= a.price);
+          console.log(`  ${a.key} ${a.cond} ${a.price} | now ${cur.toFixed(2)} | ${hit ? "🔥 HIT" : "—"}`);
+
+          if (hit) {
+            try {
+              await sendDM(env, uid, alertEmbed(ASSETS[a.key], a, cur));
+              fired.push(a.id);
+              console.log(`  ✅ DM sent to ${uid}`);
+            } catch (e) {
+              console.error(`  ❌ DM failed for ${uid}: ${e.message}`);
+            }
+          }
         }
+
+        if (fired.length) {
+          const remaining = alerts.filter(a => !fired.includes(a.id));
+          await setAlerts(env, uid, remaining);
+          console.log(`  Removed ${fired.length}, left ${remaining.length}`);
+        }
+        await sleep(400);
       }
-      if (fired.length) await setAlerts(env, uid, alerts.filter(a => !fired.includes(a.id)));
-      await sleep(500);
+
+      console.log("=== CRON END ===");
+    } catch (e) {
+      console.error("CRON ERROR:", e.message);
     }
   },
 };
 
-/* ═══════════════════ VERIFY ═══════════════════════════════ */
+/* ═════════════════ VERIFY ═══════════════════════════════ */
 async function verify(req, buf, env) {
   const sig = req.headers.get("x-signature-ed25519");
   const ts  = req.headers.get("x-signature-timestamp");
@@ -100,16 +166,33 @@ async function verify(req, buf, env) {
 }
 function h2b(h) { const b = new Uint8Array(h.length / 2); for (let i = 0; i < h.length; i += 2) b[i / 2] = parseInt(h.substring(i, i + 2), 16); return b; }
 
-/* ═══════════════════ SLASH COMMANDS ═══════════════════════ */
+/* ═════════════════ SLASH COMMANDS ═════════════════════════ */
 async function onCmd(i, env) {
   const n = i.data.name;
-  if (n === "s" || n === "start") return Response.json({ type: 4, data: { content: "📊 **اختر الأصل:**", components: mainKB() } });
-  if (n === "p") return await allPrices(env);
+  if (n === "s" || n === "start")
+    return Response.json({ type: 4, data: { content: "📊 **اختر الأصل:**", components: mainKB() } });
+  if (n === "p") return await cmdP(i, env);
   if (n === "a") return await addAlert(i, env);
   if (n === "d") return await delAlert(i, env);
-  if (n === "t") return Response.json({ type: 4, data: { content: "https://discord.com/channels/1364304054356017162/1378444097093636176" } });
+  if (n === "t")
+    return Response.json({ type: 4, data: { content: "https://discord.com/channels/1364304054356017162/1378444097093636176" } });
   if (n === "myalerts") return await myAlerts(i, env);
   return Response.json({ type: 4, data: { content: "❌", flags: 64 } });
+}
+
+/* ═══════════════════ /p ═════════════════════════════════ */
+async function cmdP(i, env) {
+  const opts = i.data.options || [];
+  const rawAsset = opts.find(o => o.name === "asset")?.value;
+  if (rawAsset) {
+    const key = resolveAsset(rawAsset);
+    if (!key) return Response.json({ type: 4, data: { content: "❌ أصل غير معروف", flags: 64 } });
+    const A = ASSETS[key];
+    const det = await fetchDetail(key);
+    if (!det.price) return Response.json({ type: 4, data: { content: `⚠️ تعذّر جلب سعر ${A.ar}`, flags: 64 } });
+    return Response.json({ type: 4, data: { embeds: [priceEmbed(key, det)] } });
+  }
+  return await allPrices(env);
 }
 
 /* ═══════════════════ /a ═════════════════════════════════ */
@@ -167,7 +250,7 @@ async function delAlert(i, env) {
   return Response.json({ type: 4, data: { content: `🗑️ تم حذف تنبيه ${ASSETS[key].icon} ${ASSETS[key].ar} عند ${fmtPrice(tgt)}`, flags: 64 } });
 }
 
-/* ═══════════════════ /p ═════════════════════════════════ */
+/* ═══════════════════ /p كل الأسعار ══════════════════════ */
 async function allPrices(env) {
   const data = await fetchAll();
   const fields = Object.entries(ASSETS).map(([k, A]) => {
@@ -194,14 +277,12 @@ async function onBtnAsync(i, env, w) {
   const patch = (body) => fetch(`${w}/messages/@original`, { method: "PATCH", headers: H, body: JSON.stringify(body) });
   const follow = (body) => fetch(w, { method: "POST", headers: H, body: JSON.stringify(body) });
   try {
-    /* كل الأسعار */
     if (d === "all") {
       const data = await fetchAll();
       const fields = Object.entries(ASSETS).map(([k, A]) => { const det = data[k]; return { name: `${A.icon} ${A.ar}`, value: det ? `**${fmtPrice(det.price)}** ${fmtChg(det.chg)}` : "⚠️", inline: true }; });
       await patch({ content: null, embeds: [{ title: "💰 جميع الأسعار", color: 0x00D278, fields, footer: { text: `Hyperliquid · ${fmtTs()}` }, timestamp: new Date().toISOString() }], components: mainKB() });
       return;
     }
-    /* عرض سعر */
     if (d.startsWith("p|")) {
       const key = d.split("|")[1], A = ASSETS[key];
       if (!A) { await patch({ content: "❌", embeds: [], components: mainKB() }); return; }
@@ -210,29 +291,22 @@ async function onBtnAsync(i, env, w) {
       await patch({ content: null, embeds: [priceEmbed(key, det)], components: detailKB(key) });
       return;
     }
-    /* تحديث سعر */
     if (d.startsWith("rpa|")) {
       const key = d.split("|")[1];
       const det = await fetchDetail(key);
       if (det.price) await patch({ embeds: [priceEmbed(key, det)], components: detailKB(key) });
       return;
     }
-    /* رسم بياني */
     if (d.startsWith("c|")) {
       const key = d.split("|")[1], A = ASSETS[key];
       await patch({ content: `⏳ جاري إنشاء رسم ${A.ar}...`, embeds: [], components: mainKB() });
-      const ok = await sendChartImg(w, key);
-      if (!ok) await follow({ content: `⚠️ تعذّر إنشاء رسم ${A.ar}`, flags: 64 });
+      await sendChartMsg(w, key);
       return;
     }
-    /* تحديث رسم */
     if (d.startsWith("rc|")) {
-      const key = d.split("|")[1], A = ASSETS[key];
-      const ok = await sendChartImg(w, key);
-      if (!ok) await follow({ content: `⚠️ تعذّر تحديث رسم ${A.ar}`, flags: 64 });
+      await sendChartMsg(w, d.split("|")[1]);
       return;
     }
-    /* حذف تنبيه */
     if (d.startsWith("del|")) {
       const aid = parseInt(d.split("|")[1]);
       const al = await getAlerts(env, uid);
@@ -246,21 +320,20 @@ async function onBtnAsync(i, env, w) {
   }
 }
 
-/* ═══════════════════ CHART — POST+ATTACHMENT ═════════════ */
-async function sendChartImg(w, key) {
+/* ═══════════════════ CHART ════════════════════════════════ */
+async function sendChartMsg(w, key) {
   const A = ASSETS[key];
+  if (!A) return;
   const now = Date.now();
-
-  /* 1. جلب شموع */
   const candleResp = await fetch(HL, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "candleSnapshot", req: { coin: A.sym, interval: "15m", startTime: now - 86400000, endTime: now } }),
   });
   const candles = await candleResp.json();
-  if (!Array.isArray(candles) || !candles.length) return false;
-
-  /* 2. حساب البيانات */
-  const labels = candles.map(c => { const d = new Date(c.t + 10800000); return `${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`; });
+  if (!Array.isArray(candles) || !candles.length) {
+    await fetch(w, { method: "POST", headers: jH(), body: JSON.stringify({ content: `⚠️ لا توجد بيانات لرسم ${A.ar}`, flags: 64 }) });
+    return;
+  }
   const prices = candles.map(c => parseFloat(c.c));
   const highs  = candles.map(c => parseFloat(c.h));
   const lows   = candles.map(c => parseFloat(c.l));
@@ -270,11 +343,10 @@ async function sendChartImg(w, key) {
   const up = lastP >= firstP;
   const clr  = up ? "rgb(0,210,120)" : "rgb(255,70,110)";
   const fill = up ? "rgba(0,210,120,0.12)" : "rgba(255,70,110,0.12)";
-  const step = 3;
+  const step = 4;
   const dP = prices.filter((_, i) => i % step === 0);
-  const dL = labels.filter((_, i) => i % step === 0);
-
-  const cfg = {
+  const dL = candles.filter((_, i) => i % step === 0).map(c => { const dt = new Date(c.t + 10800000); return `${String(dt.getUTCHours()).padStart(2,"0")}:${String(dt.getUTCMinutes()).padStart(2,"0")}`; });
+  const chartCfg = {
     type: "line",
     data: { labels: dL, datasets: [{ data: dP, borderColor: clr, backgroundColor: fill, borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3 }] },
     options: {
@@ -286,18 +358,19 @@ async function sendChartImg(w, key) {
       layout: { padding: { left: 8, right: 8, top: 4, bottom: 4 } },
     },
   };
-
-  /* 3. تحميل الصورة من QuickChart عبر POST (بدون مشكلة طول URL) */
-  const imgResp = await fetch(QC, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...cfg, w: 800, h: 380, bkg: "#0d1117", format: "png" }),
-  });
-  if (!imgResp.ok) return false;
-  const imgBuf = await imgResp.arrayBuffer();
-
-  /* 4. بناء multipart/form-data يدوياً (متوافق 100% مع Workers) */
-  const boundary = "----ChartBoundary" + Date.now();
-  const payload = JSON.stringify({
+  let imgBuf;
+  try {
+    const imgResp = await fetch(QC, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chart: chartCfg, width: 800, height: 380, backgroundColor: "#0d1117", format: "png" }) });
+    if (!imgResp.ok) throw new Error(`QC ${imgResp.status}`);
+    imgBuf = await imgResp.arrayBuffer();
+    if (imgBuf.byteLength < 1000) throw new Error("صورة صغيرة جداً");
+  } catch (e) {
+    console.error("QC:", e.message);
+    await fetch(w, { method: "POST", headers: jH(), body: JSON.stringify({ content: `⚠️ تعذّر إنشاء رسم ${A.ar}`, flags: 64 }) });
+    return;
+  }
+  const boundary = "----Chart" + Date.now();
+  const payloadJson = JSON.stringify({
     embeds: [{
       title: `${A.icon} ${A.ar} — آخر 24 ساعة`, color: up ? 0x00D278 : 0xFF466E,
       image: { url: "attachment://chart.png" },
@@ -310,33 +383,26 @@ async function sendChartImg(w, key) {
     }],
     components: chartKB(key),
   });
-
-  const pre = `--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n`;
-  const filePre = `--${boundary}\r\nContent-Disposition: form-data; name="files[0]"; filename="chart.png"\r\nContent-Type: image/png\r\n\r\n`;
-  const post = `\r\n--${boundary}--\r\n`;
-
-  const encoder = new TextEncoder();
-  const parts = [
-    encoder.encode(pre),
-    encoder.encode(payload),
-    encoder.encode(filePre),
-  ];
-  const totalLen = parts.reduce((s, p) => s + p.length, 0) + imgBuf.byteLength + encoder.encode(post).length;
-
-  const body = new Uint8Array(totalLen);
-  let offset = 0;
-  for (const p of parts) { body.set(p, offset); offset += p.length; }
-  body.set(new Uint8Array(imgBuf), offset);
-  offset += imgBuf.byteLength;
-  body.set(encoder.encode(post), offset);
-
-  /* 5. إرسال لديسكورد */
-  const resp = await fetch(w, {
-    method: "POST",
-    headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
-    body,
-  });
-  return resp.ok;
+  const enc = new TextEncoder();
+  const p1 = enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n`);
+  const p2 = enc.encode(payloadJson);
+  const p3 = enc.encode(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="files[0]"; filename="chart.png"\r\nContent-Type: image/png\r\n\r\n`);
+  const p4 = enc.encode(`\r\n--${boundary}--\r\n`);
+  const total = p1.length + p2.length + p3.length + imgBuf.byteLength + p4.length;
+  const body = new Uint8Array(total);
+  let off = 0;
+  body.set(p1, off); off += p1.length;
+  body.set(p2, off); off += p2.length;
+  body.set(p3, off); off += p3.length;
+  body.set(new Uint8Array(imgBuf), off); off += imgBuf.byteLength;
+  body.set(p4, off);
+  try {
+    const resp = await fetch(w, { method: "POST", headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` }, body });
+    if (!resp.ok) { console.error("DISC:", resp.status, await resp.text()); await fetch(w, { method: "POST", headers: jH(), body: JSON.stringify({ content: `⚠️ تعذّر إرسال رسم ${A.ar}`, flags: 64 }) }); }
+  } catch (e) {
+    console.error("SEND:", e.message);
+    await fetch(w, { method: "POST", headers: jH(), body: JSON.stringify({ content: `⚠️ خطأ في إرسال رسم ${A.ar}`, flags: 64 }) });
+  }
 }
 
 /* ═══════════════════ MODAL ═══════════════════════════════ */
@@ -428,24 +494,26 @@ async function sendDM(env, uid, embed) {
   const h = botH(env);
   const r = await fetch(`${API}/users/@me/channels`, { method: "POST", headers: h, body: JSON.stringify({ recipient_id: uid }) });
   const ch = await r.json();
-  if (!ch.id) throw new Error("DM failed");
-  await fetch(`${API}/channels/${ch.id}/messages`, { method: "POST", headers: h, body: JSON.stringify({ embeds: [embed] }) });
+  if (!ch.id) throw new Error(`DM open failed: ${JSON.stringify(ch)}`);
+  const mResp = await fetch(`${API}/channels/${ch.id}/messages`, { method: "POST", headers: h, body: JSON.stringify({ embeds: [embed] }) });
+  if (!mResp.ok) { const err = await mResp.text(); throw new Error(`DM send failed: ${mResp.status} ${err}`); }
 }
 
 /* ═══════════════════ REGISTER ════════════════════════════ */
 async function registerCmds(env) {
   const h = botH(env);
-  const choices = Object.entries(ASSETS).map(([k, A]) => ({ name: `${A.icon} ${A.ar}`, value: k.toLowerCase() }));
   const cmds = [
     { name: "s", description: "قائمة أزرار الأسعار", type: 1 },
     { name: "start", description: "قائمة أزرار الأسعار", type: 1 },
-    { name: "p", description: "كل الأسعار دفعة واحدة", type: 1 },
+    { name: "p", description: "كل الأسعار أو سعر أصل محدد", type: 1, options: [
+      { name: "asset", description: "الأصل (اختياري)", type: 3, required: false, choices: ASSET_CHOICES },
+    ]},
     { name: "a", description: "إضافة تنبيه", type: 1, options: [
-      { name: "asset", description: "الأصل", type: 3, required: true, choices },
+      { name: "asset", description: "الأصل", type: 3, required: true, choices: ASSET_CHOICES },
       { name: "price", description: "السعر المستهدف", type: 10, required: true, min_value: 0.01 },
     ]},
     { name: "d", description: "حذف تنبيه", type: 1, options: [
-      { name: "asset", description: "الأصل", type: 3, required: false, choices },
+      { name: "asset", description: "الأصل", type: 3, required: false, choices: ASSET_CHOICES },
       { name: "price", description: "السعر", type: 10, required: false, min_value: 0.01 },
     ]},
     { name: "t", description: "رابط القناة", type: 1 },
