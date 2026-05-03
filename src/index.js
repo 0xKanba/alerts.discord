@@ -12,25 +12,36 @@ const ASSETS = {
   SP500:  { sym: "xyz:SP500",  ar: "S&P 500",   icon: "📊"  },
 };
 
+const ALIAS = {
+  btc:"BTC", bitcoin:"BTC", بيتكوين:"BTC",
+  eth:"ETH", ethereum:"ETH", إيثريوم:"ETH",
+  sol:"SOL", سولانا:"SOL",
+  gold:"GOLD", xau:"GOLD", ذهب:"GOLD", gc:"GOLD",
+  silver:"SILVER", xag:"SILVER", فضة:"SILVER", si:"SILVER",
+  oil:"OIL", cl:"OIL", wti:"OIL", نفط:"OIL",
+  us100:"US100", nasdaq:"US100", nq:"US100", ناسداك:"US100",
+  sp500:"SP500", es:"SP500", us500:"SP500", sp:"SP500",
+};
+
+function resolveAsset(raw) {
+  if (!raw) return null;
+  const k = ALIAS[raw.toLowerCase().trim()] || raw.toUpperCase().trim();
+  return ASSETS[k] ? k : null;
+}
+
 function botH(env) { return { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`, "Content-Type": "application/json" }; }
 function jH()      { return { "Content-Type": "application/json" }; }
-function wURL(a, t) { return `${API}/webhooks/${a}/${t}`; }
+function whUrl(a, t) { return `${API}/webhooks/${a}/${t}`; }
 
 /* ═══════════════════════════════════════════════════════════ */
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const u = new URL(request.url);
 
     if (u.searchParams.get("debug") === "1") {
-      const c = {
-        PUBLIC_KEY: !!env.DISCORD_PUBLIC_KEY,
-        BOT_TOKEN: !!env.DISCORD_BOT_TOKEN,
-        APP_ID: !!env.DISCORD_APP_ID,
-        KV: !!env.DISCORD_KV,
-      };
-      try { await env.DISCORD_KV.put("_t", "1"); await env.DISCORD_KV.delete("_t"); c.KV_RW = true; }
-      catch (e) { c.KV_RW = false; c.KV_ERR = e.message; }
-      return new Response(JSON.stringify(c, null, 2), { headers: { "Content-Type": "application/json" } });
+      const c = { PUBLIC_KEY: !!env.DISCORD_PUBLIC_KEY, BOT_TOKEN: !!env.DISCORD_BOT_TOKEN, APP_ID: !!env.DISCORD_APP_ID, KV: !!env.DISCORD_KV };
+      try { await env.DISCORD_KV.put("_t","1"); await env.DISCORD_KV.delete("_t"); c.KV_RW = true; } catch(e) { c.KV_RW = false; c.KV_ERR = e.message; }
+      return new Response(JSON.stringify(c,null,2), { headers:{"Content-Type":"application/json"} });
     }
 
     if (u.searchParams.get("register") === "1") return registerCmds(env);
@@ -40,10 +51,44 @@ export default {
       const buf = await request.arrayBuffer();
       const txt = new TextDecoder().decode(buf);
       if (!(await verify(request, buf, env))) return new Response("Invalid", { status: 401 });
-      return await route(JSON.parse(txt), env);
+      const i = JSON.parse(txt);
+
+      if (i.type === 1) return Response.json({ type: 1 });
+
+      const uid = i.member?.user?.id || i.user?.id;
+      if (uid) await regUser(env, uid);
+
+      if (i.type === 2) return await onCmd(i, env);
+
+      if (i.type === 3) {
+        const d = i.data.custom_id;
+
+        if (d === "back")
+          return Response.json({ type: 7, data: { content: "📊 **اختر الأصل:**", embeds: [], components: mainKB() } });
+
+        if (d.startsWith("al|")) {
+          const key = d.split("|")[1], A = ASSETS[key];
+          if (!A) return new Response(null, { status: 204 });
+          return Response.json({ type: 9, data: {
+            custom_id: `al|${key}`, title: `تنبيه — ${A.icon} ${A.ar}`,
+            components: [{ type: 1, components: [{
+              type: 4, custom_id: "price", label: "السعر المستهدف",
+              style: 1, placeholder: "مثال: 95000", required: true,
+              min_length: 1, max_length: 20,
+            }]}]
+          }});
+        }
+
+        ctx.waitUntil(onBtnAsync(i, env, whUrl(i.application_id, i.token)));
+        return Response.json({ type: 6 });
+      }
+
+      if (i.type === 5) return await onModal(i, env);
+
+      return new Response(null, { status: 204 });
     } catch (e) {
       console.error("ERR:", e.message);
-      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers:{"Content-Type":"application/json"} });
     }
   },
 
@@ -67,7 +112,7 @@ export default {
   },
 };
 
-/* ═══════════════════════════════════════════════════════════ */
+/* ═══════════════════ VERIFY ═══════════════════════════════ */
 async function verify(req, buf, env) {
   const sig = req.headers.get("x-signature-ed25519");
   const ts  = req.headers.get("x-signature-timestamp");
@@ -77,137 +122,173 @@ async function verify(req, buf, env) {
 }
 function h2b(h) { const b = new Uint8Array(h.length / 2); for (let i = 0; i < h.length; i += 2) b[i / 2] = parseInt(h.substring(i, i + 2), 16); return b; }
 
-/* ═══════════════════════════════════════════════════════════ */
-async function route(i, env) {
-  try {
-    if (i.type === 1) return Response.json({ type: 1 });
-    const uid = i.member?.user?.id || i.user?.id;
-    if (uid) await regUser(env, uid);
-    const w = wURL(i.application_id, i.token);
-    if (i.type === 2) return onCmd(i, env);
-    if (i.type === 3) return onBtn(i, env, w);
-    if (i.type === 5) return onModal(i, env, w);
-    return new Response(null, { status: 204 });
-  } catch (e) {
-    console.error("ROUTE:", e.message);
-    try {
-      await fetch(wURL(i.application_id, i.token), {
-        method: "POST", headers: jH(),
-        body: JSON.stringify({ content: `❌ خطأ: ${e.message}` }),
-      });
-    } catch {}
-    return new Response(null, { status: 500 });
-  }
-}
-
-/* ═══════════════════ SLASH COMMANDS ═════════════════════════ */
-function onCmd(i, env) {
+/* ═══════════════════ SLASH COMMANDS ═══════════════════════ */
+async function onCmd(i, env) {
   const n = i.data.name;
   if (n === "s" || n === "start")
     return Response.json({ type: 4, data: { content: "📊 **اختر الأصل:**", components: mainKB() } });
-  if (n === "p") return allPrices(i, env);
+  if (n === "p") return await allPrices(env);
+  if (n === "a") return await addAlert(i, env);
+  if (n === "d") return await delAlert(i, env);
   if (n === "t")
     return Response.json({ type: 4, data: { content: "https://discord.com/channels/1364304054356017162/1378444097093636176" } });
-  if (n === "myalerts") return myAlerts(i, env);
+  if (n === "myalerts") return await myAlerts(i, env);
   return Response.json({ type: 4, data: { content: "❌", flags: 64 } });
 }
 
-/* ═══════════════════ ALL PRICES ═══════════════════════════ */
-async function allPrices(i, env) {
+/* ═══════════════════ /a — إضافة تنبيه ═══════════════════ */
+async function addAlert(i, env) {
+  const opts = i.data.options || [];
+  const rawAsset = opts.find(o => o.name === "asset")?.value;
+  const tgt = opts.find(o => o.name === "price")?.value;
+  const key = resolveAsset(rawAsset);
+  if (!key) return Response.json({ type: 4, data: { content: "❌ أصل غير معروف", flags: 64 } });
+  const A = ASSETS[key];
+  if (isNaN(tgt) || tgt <= 0) return Response.json({ type: 4, data: { content: "❌ سعر غير صحيح", flags: 64 } });
   const data = await fetchAll();
-  const fields = [];
-  for (const [k, A] of Object.entries(ASSETS)) {
-    const d = data[k];
-    fields.push({ name: `${A.icon} ${A.ar}`, value: d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg)}` : "⚠️", inline: true });
+  const cur = data[key]?.price;
+  if (!cur) return Response.json({ type: 4, data: { content: `⚠️ تعذّر جلب سعر ${A.ar}`, flags: 64 } });
+  const cond = tgt > cur ? ">" : "<";
+  const dist = Math.abs((tgt - cur) / cur * 100).toFixed(2);
+  const dir = cond === ">" ? "🔼 عند الصعود إلى" : "🔽 عند النزول إلى";
+  const uid = i.member?.user?.id || i.user?.id;
+  const alerts = await getAlerts(env, uid);
+  alerts.push({ id: Date.now(), key, cond, price: tgt });
+  await setAlerts(env, uid, alerts);
+  return Response.json({ type: 4, data: { embeds: [{
+    title: "✅ تنبيه مُضاف", color: 0x00D278,
+    description: `${A.icon} **${A.ar}** — ${dir} **${fmtPrice(tgt)}**\n\nالسعر الحالي: ${fmtPrice(cur)}\nالبُعد عن الهدف: ${dist}%\n\n⏱ سيصلك التنبيه فور الوصول كرسالة خاصة`,
+    footer: { text: fmtTs() }, timestamp: new Date().toISOString(),
+  }]}});
+}
+
+/* ═══════════════════ /d — حذف تنبيه ════════════════════ */
+async function delAlert(i, env) {
+  const opts = i.data.options || [];
+  const rawAsset = opts.find(o => o.name === "asset")?.value;
+  const tgt = opts.find(o => o.name === "price")?.value;
+  const uid = i.member?.user?.id || i.user?.id;
+
+  if (!rawAsset && tgt === undefined) {
+    const alerts = await getAlerts(env, uid);
+    if (!alerts.length) return Response.json({ type: 4, data: { content: "📭 لا توجد تنبيهات لحذفها", flags: 64 } });
+    await setAlerts(env, uid, []);
+    return Response.json({ type: 4, data: { content: `🗑️ تم حذف **${alerts.length}** تنبيه`, flags: 64 } });
   }
+
+  const key = resolveAsset(rawAsset);
+  if (!key) return Response.json({ type: 4, data: { content: "❌ أصل غير معروف", flags: 64 } });
+  const alerts = await getAlerts(env, uid);
+
+  if (tgt === undefined) {
+    const before = alerts.length;
+    const filtered = alerts.filter(a => a.key !== key);
+    const deleted = before - filtered.length;
+    if (!deleted) return Response.json({ type: 4, data: { content: `📭 لا توجد تنبيهات لـ ${ASSETS[key].ar}`, flags: 64 } });
+    await setAlerts(env, uid, filtered);
+    return Response.json({ type: 4, data: { content: `🗑️ تم حذف **${deleted}** تنبيه لـ ${ASSETS[key].icon} ${ASSETS[key].ar}`, flags: 64 } });
+  }
+
+  const before = alerts.length;
+  const filtered = alerts.filter(a => !(a.key === key && Math.abs(a.price - tgt) < 0.01));
+  const deleted = before - filtered.length;
+  if (!deleted) return Response.json({ type: 4, data: { content: "📭 لا يوجد تنبيه مطابق", flags: 64 } });
+  await setAlerts(env, uid, filtered);
+  return Response.json({ type: 4, data: { content: `🗑️ تم حذف تنبيه ${ASSETS[key].icon} ${ASSETS[key].ar} عند ${fmtPrice(tgt)}`, flags: 64 } });
+}
+
+/* ═══════════════════ /p — كل الأسعار ════════════════════ */
+async function allPrices(env) {
+  const data = await fetchAll();
+  const fields = Object.entries(ASSETS).map(([k, A]) => {
+    const d = data[k];
+    return { name: `${A.icon} ${A.ar}`, value: d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg)}` : "⚠️", inline: true };
+  });
   return Response.json({ type: 4, data: { flags: 64, embeds: [{
-    title: "💰 جميع الأسعار", color: 0x00D278,
-    fields,
+    title: "💰 جميع الأسعار", color: 0x00D278, fields,
     footer: { text: `Hyperliquid · ${fmtTs()}` }, timestamp: new Date().toISOString(),
   }]}});
 }
 
-/* ═══════════════════ BUTTONS ══════════════════════════════ */
-async function onBtn(i, env, w) {
+/* ═══════════════════ /myalerts ══════════════════════════ */
+async function myAlerts(i, env) {
+  const uid = i.member?.user?.id || i.user?.id;
+  const alerts = await getAlerts(env, uid);
+  if (!alerts.length) return Response.json({ type: 4, data: { content: "📭 لا توجد تنبيهات نشطة\n\n`/a btc 95000` لإضافة\n`/d` لحذف الكل", flags: 64 } });
+  const rows = alerts.slice(0, 10).map(a => ({
+    type: 1, components: [{ type: 2, style: 4,
+      label: `🗑️ ${ASSETS[a.key]?.icon||""} ${ASSETS[a.key]?.ar||a.key} ${a.cond===">"?"🔼":"🔽"} ${fmtPrice(a.price)}`,
+      custom_id: `del|${a.id}`,
+    }]
+  }));
+  return Response.json({ type: 4, data: {
+    content: `🔔 **تنبيهاتك (${alerts.length}):**\n\n\`/d\` → حذف الكل\n\`/d btc\` → حذف كل BTC\n\`/d btc 95000\` → حذف محدد`,
+    components: rows, flags: 64,
+  }});
+}
+
+/* ═══════════════════ ASYNC BUTTONS (ctx.waitUntil) ═══════ */
+async function onBtnAsync(i, env, w) {
   const d = i.data.custom_id;
   const H = jH();
   const uid = i.member?.user?.id || i.user?.id;
-  const patch = (body) => fetch(`${w}/messages/@original`, { method: "PATCH", headers: H, body: JSON.stringify(body) }).catch(e => console.error(e.message));
-  const follow = (body) => fetch(w, { method: "POST", headers: H, body: JSON.stringify(body) }).catch(e => console.error(e.message));
+  const patch = (body) => fetch(`${w}/messages/@original`, { method: "PATCH", headers: H, body: JSON.stringify(body) });
+  const follow = (body) => fetch(w, { method: "POST", headers: H, body: JSON.stringify(body) });
 
-  if (d === "back")
-    return Response.json({ type: 7, data: { content: "📊 **اختر الأصل:**", embeds: [], components: mainKB() } });
-
-  if (d === "all") {
-    const r = Response.json({ type: 6 });
-    fetchAll().then(data => {
-      const fields = [];
-      for (const [k, A] of Object.entries(ASSETS)) {
+  try {
+    if (d === "all") {
+      const data = await fetchAll();
+      const fields = Object.entries(ASSETS).map(([k, A]) => {
         const det = data[k];
-        fields.push({ name: `${A.icon} ${A.ar}`, value: det ? `**${fmtPrice(det.price)}** ${fmtChg(det.chg)}` : "⚠️", inline: true });
-      }
-      patch({ content: null, embeds: [{ title: "💰 جميع الأسعار", color: 0x00D278, fields, footer: { text: `Hyperliquid · ${fmtTs()}` }, timestamp: new Date().toISOString() }], components: mainKB() });
-    });
-    return r;
-  }
+        return { name: `${A.icon} ${A.ar}`, value: det ? `**${fmtPrice(det.price)}** ${fmtChg(det.chg)}` : "⚠️", inline: true };
+      });
+      await patch({ content: null, embeds: [{ title: "💰 جميع الأسعار", color: 0x00D278, fields, footer: { text: `Hyperliquid · ${fmtTs()}` }, timestamp: new Date().toISOString() }], components: mainKB() });
+      return;
+    }
 
-  if (d.startsWith("p|")) {
-    const key = d.split("|")[1], A = ASSETS[key];
-    if (!A) return Response.json({ type: 7, data: { content: "❌", embeds: [], components: mainKB() } });
-    const r = Response.json({ type: 6 });
-    fetchDetail(key).then(det => {
-      if (!det.price) return patch({ content: `⚠️ تعذّر جلب سعر ${A.ar}`, embeds: [], components: mainKB() });
-      patch({ content: null, embeds: [priceEmbed(key, det)], components: detailKB(key) });
-    });
-    return r;
-  }
+    if (d.startsWith("p|")) {
+      const key = d.split("|")[1], A = ASSETS[key];
+      if (!A) { await patch({ content: "❌", embeds: [], components: mainKB() }); return; }
+      const det = await fetchDetail(key);
+      if (!det.price) { await patch({ content: `⚠️ تعذّر جلب سعر ${A.ar}`, embeds: [], components: mainKB() }); return; }
+      await patch({ content: null, embeds: [priceEmbed(key, det)], components: detailKB(key) });
+      return;
+    }
 
-  if (d.startsWith("rpa|")) {
-    const key = d.split("|")[1];
-    const r = Response.json({ type: 6 });
-    fetchDetail(key).then(det => { if (det.price) patch({ embeds: [priceEmbed(key, det)], components: detailKB(key) }); });
-    return r;
-  }
+    if (d.startsWith("rpa|")) {
+      const key = d.split("|")[1];
+      const det = await fetchDetail(key);
+      if (det.price) await patch({ embeds: [priceEmbed(key, det)], components: detailKB(key) });
+      return;
+    }
 
-  if (d.startsWith("c|")) {
-    const key = d.split("|")[1];
-    const r = Response.json({ type: 6 });
-    patch({ content: "📊 **اختر الأصل:**", embeds: [], components: mainKB() });
-    buildChart(key).then(cd => {
-      if (!cd) return follow({ content: "⚠️ لا توجد بيانات", flags: 64 });
-      follow({ embeds: [chartEmbed(key, cd)], components: chartKB(key) });
-    });
-    return r;
-  }
+    if (d.startsWith("c|")) {
+      const key = d.split("|")[1];
+      await patch({ content: "📊 **اختر الأصل:**", embeds: [], components: mainKB() });
+      const cd = await buildChart(key);
+      if (!cd) { await follow({ content: "⚠️ لا توجد بيانات", flags: 64 }); return; }
+      await follow({ embeds: [chartEmbed(key, cd)], components: chartKB(key) });
+      return;
+    }
 
-  if (d.startsWith("rc|")) {
-    const key = d.split("|")[1];
-    const r = Response.json({ type: 6 });
-    buildChart(key).then(cd => { if (cd) patch({ embeds: [chartEmbed(key, cd)], components: chartKB(key) }); });
-    return r;
-  }
+    if (d.startsWith("rc|")) {
+      const key = d.split("|")[1];
+      const cd = await buildChart(key);
+      if (cd) await patch({ embeds: [chartEmbed(key, cd)], components: chartKB(key) });
+      return;
+    }
 
-  if (d.startsWith("al|")) {
-    const key = d.split("|")[1], A = ASSETS[key];
-    if (!A) return new Response(null, { status: 204 });
-    return Response.json({ type: 9, data: {
-      custom_id: `al|${key}`, title: `تنبيه — ${A.icon} ${A.ar}`,
-      components: [{ type: 1, components: [{ type: 4, custom_id: "price", label: "السعر المستهدف", style: 1, placeholder: "مثال: 95000", required: true, min_length: 1, max_length: 20 }] }]
-    }});
-  }
-
-  if (d.startsWith("del|")) {
-    const aid = parseInt(d.split("|")[1]);
-    const r = Response.json({ type: 6 });
-    (async () => {
+    if (d.startsWith("del|")) {
+      const aid = parseInt(d.split("|")[1]);
       const al = await getAlerts(env, uid);
       await setAlerts(env, uid, al.filter(a => a.id !== aid));
-      patch({ content: "🗑️ تم حذف التنبيه", embeds: [], components: mainKB() });
-    })();
-    return r;
+      await patch({ content: "🗑️ تم حذف التنبيه", embeds: [], components: mainKB() });
+      return;
+    }
+  } catch (e) {
+    console.error("BTN:", e.message);
+    try { await follow({ content: `❌ خطأ: ${e.message}`, flags: 64 }); } catch {}
   }
-
-  return new Response(null, { status: 204 });
 }
 
 /* ═══════════════════ MODAL SUBMIT ════════════════════════ */
@@ -216,37 +297,23 @@ async function onModal(i, env) {
   if (!d.startsWith("al|")) return new Response(null, { status: 204 });
   const key = d.split("|")[1], A = ASSETS[key];
   if (!A) return Response.json({ type: 4, data: { content: "❌", flags: 64 } });
-
   const raw = i.data.components[0].components[0].value;
   const tgt = parseFloat(raw.replace(/,/g, "").replace(/\$/g, ""));
   if (isNaN(tgt) || tgt <= 0) return Response.json({ type: 4, data: { content: "❌ سعر غير صحيح", flags: 64 } });
-
   const data = await fetchAll();
   const cur = data[key]?.price;
   if (!cur) return Response.json({ type: 4, data: { content: `⚠️ تعذّر جلب سعر ${A.ar}`, flags: 64 } });
-
   const cond = tgt > cur ? ">" : "<";
   const dist = Math.abs((tgt - cur) / cur * 100).toFixed(2);
   const dir = cond === ">" ? "🔼 عند الصعود إلى" : "🔽 عند النزول إلى";
-
   const alerts = await getAlerts(env, uid);
   alerts.push({ id: Date.now(), key, cond, price: tgt });
   await setAlerts(env, uid, alerts);
-
   return Response.json({ type: 4, data: { embeds: [{
     title: "✅ تنبيه مُضاف", color: 0x00D278,
     description: `${A.icon} **${A.ar}** — ${dir} **${fmtPrice(tgt)}**\n\nالسعر الحالي: ${fmtPrice(cur)}\nالبُعد عن الهدف: ${dist}%\n\n⏱ سيصلك التنبيه فور الوصول كرسالة خاصة`,
     footer: { text: fmtTs() }, timestamp: new Date().toISOString(),
   }]}});
-}
-
-/* ═══════════════════ MY ALERTS ════════════════════════════ */
-async function myAlerts(i, env) {
-  const uid = i.member?.user?.id || i.user?.id;
-  const alerts = await getAlerts(env, uid);
-  if (!alerts.length) return Response.json({ type: 4, data: { content: "📭 لا توجد تنبيهات نشطة\n\nاستخدم `/s` ثم اضغط 🔔", flags: 64 } });
-  const rows = alerts.slice(0, 5).map(a => ({ type: 1, components: [{ type: 2, style: 4, label: `🗑️ ${ASSETS[a.key]?.icon || ""} ${ASSETS[a.key]?.ar || a.key} ${a.cond === ">" ? "🔼" : "🔽"} ${fmtPrice(a.price)}`, custom_id: `del|${a.id}` }] }));
-  return Response.json({ type: 4, data: { content: `🔔 **تنبيهاتك النشطة (${alerts.length}):**`, components: rows, flags: 64 } });
 }
 
 /* ═══════════════════ UI COMPONENTS ══════════════════════ */
@@ -333,15 +400,24 @@ async function sendDM(env, uid, embed) {
 /* ═══════════════════ REGISTER ════════════════════════════ */
 async function registerCmds(env) {
   const h = botH(env);
+  const choices = Object.entries(ASSETS).map(([k, A]) => ({ name: `${A.icon} ${A.ar}`, value: k.toLowerCase() }));
   const cmds = [
     { name: "s", description: "قائمة أزرار الأسعار", type: 1 },
     { name: "start", description: "قائمة أزرار الأسعار", type: 1 },
     { name: "p", description: "كل الأسعار دفعة واحدة", type: 1 },
+    { name: "a", description: "إضافة تنبيه", type: 1, options: [
+      { name: "asset", description: "الأصل", type: 3, required: true, choices },
+      { name: "price", description: "السعر المستهدف", type: 10, required: true, min_value: 0.01 },
+    ]},
+    { name: "d", description: "حذف تنبيه (بدون معاملات = حذف الكل)", type: 1, options: [
+      { name: "asset", description: "الأصل (اختياري)", type: 3, required: false, choices },
+      { name: "price", description: "السعر (اختياري)", type: 10, required: false, min_value: 0.01 },
+    ]},
     { name: "t", description: "رابط القناة", type: 1 },
     { name: "myalerts", description: "تنبيهاتك النشطة", type: 1 },
   ];
   const r = await fetch(`${API}/applications/${env.DISCORD_APP_ID}/commands`, { method: "PUT", headers: h, body: JSON.stringify(cmds) });
-  return new Response(JSON.stringify(await r.json(), null, 2), { headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(await r.json(), null, 2), { headers:{"Content-Type":"application/json"} });
 }
 
 /* ═══════════════════ DATA ════════════════════════════════ */
@@ -388,7 +464,7 @@ async function buildChart(key) {
   const r = await fetch(HL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: A.sym, interval: "15m", startTime: now - 86400000, endTime: now } }) });
   const candles = await r.json();
   if (!Array.isArray(candles) || !candles.length) return null;
-  const labels = candles.map(c => { const d = new Date(c.t + 10800000); return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`; });
+  const labels = candles.map(c => { const d = new Date(c.t + 10800000); return `${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`; });
   const prices = candles.map(c => parseFloat(c.c)), highs = candles.map(c => parseFloat(c.h)), lows = candles.map(c => parseFloat(c.l));
   const minP = Math.min(...lows), maxP = Math.max(...highs), firstP = prices[0], lastP = prices[prices.length - 1];
   const chg = (lastP - firstP) / firstP * 100, up = lastP >= firstP;
@@ -418,5 +494,5 @@ async function regUser(env, id) { const u = await getUsers(env); if (!u.includes
 /* ═══════════════════ FORMAT ══════════════════════════════ */
 function fmtPrice(v) { if (!v) return "—"; if (v >= 1000) return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); if (v >= 100) return "$" + v.toFixed(2); if (v >= 1) return "$" + v.toFixed(3); return "$" + v.toFixed(5); }
 function fmtChg(c) { if (c == null) return "—"; return `${c >= 0 ? "🟢" : "🔴"} ${c >= 0 ? "+" : ""}${c.toFixed(2)}%`; }
-function fmtTs() { const d = new Date(Date.now() + 10800000); const dd = String(d.getUTCDate()).padStart(2, "0"); const mm = String(d.getUTCMonth() + 1).padStart(2, "0"); const yyyy = d.getUTCFullYear(); let hh = d.getUTCHours(); const min = String(d.getUTCMinutes()).padStart(2, "0"); const ss = String(d.getUTCSeconds()).padStart(2, "0"); const ap = hh >= 12 ? "م" : "ص"; hh = hh % 12 || 12; return `${dd}/${mm}/${yyyy}، ${String(hh).padStart(2, "0")}:${min}:${ss} ${ap}`; }
+function fmtTs() { const d = new Date(Date.now() + 10800000); const dd = String(d.getUTCDate()).padStart(2,"0"); const mm = String(d.getUTCMonth() + 1).padStart(2,"0"); const yyyy = d.getUTCFullYear(); let hh = d.getUTCHours(); const min = String(d.getUTCMinutes()).padStart(2,"0"); const ss = String(d.getUTCSeconds()).padStart(2,"0"); const ap = hh >= 12 ? "م" : "ص"; hh = hh % 12 || 12; return `${dd}/${mm}/${yyyy}، ${String(hh).padStart(2,"0")}:${min}:${ss} ${ap}`; }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
