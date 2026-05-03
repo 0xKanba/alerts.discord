@@ -2,14 +2,19 @@ const HL = "https://api.hyperliquid.xyz/info";
 const API = "https://discord.com/api/v10";
 
 const ASSETS = {
-  GOLD:   { sym: "xyz:GOLD",   ar: "الذهب", icon: "🟡" },
-  SILVER: { sym: "xyz:SILVER", ar: "الفضة", icon: "⚪" },
-  OIL:    { sym: "xyz:CL",     ar: "النفط", icon: "🛢" },
+  BTC:    { sym: "BTC",        ar: "بيتكوين",   icon: "₿"  },
+  ETH:    { sym: "ETH",        ar: "إيثريوم",   icon: "🔷"  },
+  SOL:    { sym: "SOL",        ar: "سولانا",    icon: "🟣"  },
+  GOLD:   { sym: "xyz:GOLD",   ar: "الذهب",     icon: "🟡"  },
+  SILVER: { sym: "xyz:SILVER", ar: "الفضة",     icon: "⚪"  },
+  OIL:    { sym: "xyz:CL",     ar: "النفط",     icon: "🛢"  },
+  US100:  { sym: "xyz:XYZ100", ar: "ناسداك",    icon: "📈"  },
+  SP500:  { sym: "xyz:SP500",  ar: "S&P 500",   icon: "📊"  },
 };
 
 function botH(env) { return { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`, "Content-Type": "application/json" }; }
 function jH()      { return { "Content-Type": "application/json" }; }
-function wURL(app, tok) { return `${API}/webhooks/${app}/${tok}`; }
+function wURL(a, t) { return `${API}/webhooks/${a}/${t}`; }
 
 /* ═══════════════════════════════════════════════════════════ */
 export default {
@@ -70,10 +75,30 @@ function onCmd(i, env) {
   const n = i.data.name;
   if (n === "s" || n === "start")
     return Response.json({ type: 4, data: { content: "📊 **اختر الأصل:**", components: mainKB() } });
+  if (n === "p") return allPrices(i, env);
   if (n === "t")
     return Response.json({ type: 4, data: { content: "https://discord.com/channels/1364304054356017162/1378444097093636176" } });
   if (n === "myalerts") return myAlerts(i, env);
   return Response.json({ type: 4, data: { content: "❌", flags: 64 } });
+}
+
+/* ═══════════════════ ALL PRICES ═══════════════════════════ */
+async function allPrices(i, env) {
+  const data = await fetchAll();
+  const fields = [];
+  for (const [k, A] of Object.entries(ASSETS)) {
+    const d = data[k];
+    fields.push({
+      name: `${A.icon} ${A.ar}`,
+      value: d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg)}` : "⚠️",
+      inline: true,
+    });
+  }
+  return Response.json({ type: 4, data: { flags: 64, embeds: [{
+    title: "💰 جميع الأسعار", color: 0x00D278,
+    fields,
+    footer: { text: `Hyperliquid · ${fmtTs()}` }, timestamp: new Date().toISOString(),
+  }]}});
 }
 
 /* ═══════════════════ BUTTONS ══════════════════════════════ */
@@ -86,6 +111,19 @@ async function onBtn(i, env, w) {
 
   if (d === "back")
     return Response.json({ type: 7, data: { content: "📊 **اختر الأصل:**", embeds: [], components: mainKB() } });
+
+  if (d === "all") {
+    const r = Response.json({ type: 6 });
+    fetchAll().then(data => {
+      const fields = [];
+      for (const [k, A] of Object.entries(ASSETS)) {
+        const det = data[k];
+        fields.push({ name: `${A.icon} ${A.ar}`, value: det ? `**${fmtPrice(det.price)}** ${fmtChg(det.chg)}` : "⚠️", inline: true });
+      }
+      patch({ content: null, embeds: [{ title: "💰 جميع الأسعار", color: 0x00D278, fields, footer: { text: `Hyperliquid · ${fmtTs()}` }, timestamp: new Date().toISOString() }], components: mainKB() });
+    });
+    return r;
+  }
 
   if (d.startsWith("p|")) {
     const key = d.split("|")[1], A = ASSETS[key];
@@ -128,7 +166,7 @@ async function onBtn(i, env, w) {
     if (!A) return new Response(null, { status: 204 });
     return Response.json({ type: 9, data: {
       custom_id: `al|${key}`, title: `تنبيه — ${A.icon} ${A.ar}`,
-      components: [{ type: 1, components: [{ type: 4, custom_id: "price", label: "السعر المستهدف", style: 1, placeholder: "مثال: 3200", required: true, min_length: 1, max_length: 20 }] }]
+      components: [{ type: 1, components: [{ type: 4, custom_id: "price", label: "السعر المستهدف", style: 1, placeholder: "مثال: 95000", required: true, min_length: 1, max_length: 20 }] }]
     }});
   }
 
@@ -138,7 +176,7 @@ async function onBtn(i, env, w) {
     (async () => {
       const al = await getAlerts(env, uid);
       await setAlerts(env, uid, al.filter(a => a.id !== aid));
-      patch({ content: "🗑️ تم حذف التنبيه", components: [] });
+      patch({ content: "🗑️ تم حذف التنبيه", embeds: [], components: mainKB() });
     })();
     return r;
   }
@@ -147,7 +185,7 @@ async function onBtn(i, env, w) {
 }
 
 /* ═══════════════════ MODAL SUBMIT ════════════════════════ */
-async function onModal(i, env, w) {
+async function onModal(i, env) {
   const d = i.data.custom_id, uid = i.member?.user?.id || i.user?.id;
   if (!d.startsWith("al|")) return new Response(null, { status: 204 });
   const key = d.split("|")[1], A = ASSETS[key];
@@ -181,16 +219,32 @@ async function myAlerts(i, env) {
   const uid = i.member?.user?.id || i.user?.id;
   const alerts = await getAlerts(env, uid);
   if (!alerts.length) return Response.json({ type: 4, data: { content: "📭 لا توجد تنبيهات نشطة\n\nاستخدم `/s` ثم اضغط 🔔", flags: 64 } });
-  const rows = alerts.slice(0, 5).map(a => ({ type: 1, components: [{ type: 2, style: 4, label: `🗑️ ${ASSETS[a.key].icon} ${ASSETS[a.key].ar} ${a.cond === ">" ? "🔼" : "🔽"} ${fmtPrice(a.price)}`, custom_id: `del|${a.id}` }] }));
+  const rows = alerts.slice(0, 5).map(a => ({ type: 1, components: [{ type: 2, style: 4, label: `🗑️ ${ASSETS[a.key]?.icon || ""} ${ASSETS[a.key]?.ar || a.key} ${a.cond === ">" ? "🔼" : "🔽"} ${fmtPrice(a.price)}`, custom_id: `del|${a.id}` }] }));
   return Response.json({ type: 4, data: { content: `🔔 **تنبيهاتك النشطة (${alerts.length}):**`, components: rows, flags: 64 } });
 }
 
 /* ═══════════════════ UI COMPONENTS ══════════════════════ */
-function mainKB() { return [{ type: 1, components: [
-  { type: 2, style: 2, label: "🟡 ذهب", custom_id: "p|GOLD" },
-  { type: 2, style: 2, label: "⚪ فضة", custom_id: "p|SILVER" },
-  { type: 2, style: 2, label: "🛢 نفط", custom_id: "p|OIL" },
-]}];}
+function mainKB() {
+  return [
+    { type: 1, components: [
+      { type: 2, style: 2, label: "₿ BTC",   custom_id: "p|BTC"   },
+      { type: 2, style: 2, label: "🔷 ETH",   custom_id: "p|ETH"   },
+      { type: 2, style: 2, label: "🟣 SOL",   custom_id: "p|SOL"   },
+    ]},
+    { type: 1, components: [
+      { type: 2, style: 2, label: "📊 S&P 500", custom_id: "p|SP500" },
+      { type: 2, style: 2, label: "📈 ناسداك",  custom_id: "p|US100"  },
+    ]},
+    { type: 1, components: [
+      { type: 2, style: 2, label: "🟡 ذهب",   custom_id: "p|GOLD"   },
+      { type: 2, style: 2, label: "⚪ فضة",   custom_id: "p|SILVER" },
+      { type: 2, style: 2, label: "🛢 نفط",   custom_id: "p|OIL"    },
+    ]},
+    { type: 1, components: [
+      { type: 2, style: 1, label: "💰 كل الأسعار", custom_id: "all" },
+    ]},
+  ];
+}
 function detailKB(k) { return [
   { type: 1, components: [
     { type: 2, style: 2, label: "🔄 تحديث", custom_id: `rpa|${k}` },
@@ -217,7 +271,7 @@ function priceEmbed(key, d) {
       { name: "↓ أدنى اليوم", value: fmtPrice(d.low), inline: true },
       ...(rng && rngP ? [{ name: "↔ المدى", value: `${fmtPrice(rng)} (${rngP}%)`, inline: true }] : []),
     ],
-    footer: { text: `Hyperliquid xyz · ${fmtTs()}` }, timestamp: new Date().toISOString(),
+    footer: { text: `Hyperliquid · ${fmtTs()}` }, timestamp: new Date().toISOString(),
   };
 }
 function chartEmbed(key, cd) {
@@ -254,8 +308,9 @@ async function sendDM(env, uid, embed) {
 async function registerCmds(env) {
   const h = botH(env);
   const cmds = [
-    { name: "s", description: "أسعار الذهب والفضة والنفط", type: 1 },
-    { name: "start", description: "أسعار الذهب والفضة والنفط", type: 1 },
+    { name: "s", description: "قائمة أزرار الأسعار", type: 1 },
+    { name: "start", description: "قائمة أزرار الأسعار", type: 1 },
+    { name: "p", description: "كل الأسعار دفعة واحدة", type: 1 },
     { name: "t", description: "رابط القناة", type: 1 },
     { name: "myalerts", description: "تنبيهاتك النشطة", type: 1 },
   ];
