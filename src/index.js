@@ -16,13 +16,11 @@ function botH(env) { return { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`, "
 function jH()      { return { "Content-Type": "application/json" }; }
 function wURL(a, t) { return `${API}/webhooks/${a}/${t}`; }
 
-/* ═══════════════════════════════════════════════════════════ *
-
+/* ═══════════════════════════════════════════════════════════ */
 export default {
   async fetch(request, env) {
     const u = new URL(request.url);
 
-    /* ─── Debug ─── */
     if (u.searchParams.get("debug") === "1") {
       const c = {
         PUBLIC_KEY: !!env.DISCORD_PUBLIC_KEY,
@@ -80,7 +78,6 @@ async function verify(req, buf, env) {
 function h2b(h) { const b = new Uint8Array(h.length / 2); for (let i = 0; i < h.length; i += 2) b[i / 2] = parseInt(h.substring(i, i + 2), 16); return b; }
 
 /* ═══════════════════════════════════════════════════════════ */
-
 async function route(i, env) {
   try {
     if (i.type === 1) return Response.json({ type: 1 });
@@ -102,6 +99,7 @@ async function route(i, env) {
     return new Response(null, { status: 500 });
   }
 }
+
 /* ═══════════════════ SLASH COMMANDS ═════════════════════════ */
 function onCmd(i, env) {
   const n = i.data.name;
@@ -120,11 +118,7 @@ async function allPrices(i, env) {
   const fields = [];
   for (const [k, A] of Object.entries(ASSETS)) {
     const d = data[k];
-    fields.push({
-      name: `${A.icon} ${A.ar}`,
-      value: d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg)}` : "⚠️",
-      inline: true,
-    });
+    fields.push({ name: `${A.icon} ${A.ar}`, value: d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg)}` : "⚠️", inline: true });
   }
   return Response.json({ type: 4, data: { flags: 64, embeds: [{
     title: "💰 جميع الأسعار", color: 0x00D278,
