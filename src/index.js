@@ -16,16 +16,37 @@ function botH(env) { return { "Authorization": `Bot ${env.DISCORD_BOT_TOKEN}`, "
 function jH()      { return { "Content-Type": "application/json" }; }
 function wURL(a, t) { return `${API}/webhooks/${a}/${t}`; }
 
-/* ═══════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════ *
+
 export default {
   async fetch(request, env) {
     const u = new URL(request.url);
+
+    /* ─── Debug ─── */
+    if (u.searchParams.get("debug") === "1") {
+      const c = {
+        PUBLIC_KEY: !!env.DISCORD_PUBLIC_KEY,
+        BOT_TOKEN: !!env.DISCORD_BOT_TOKEN,
+        APP_ID: !!env.DISCORD_APP_ID,
+        KV: !!env.DISCORD_KV,
+      };
+      try { await env.DISCORD_KV.put("_t", "1"); await env.DISCORD_KV.delete("_t"); c.KV_RW = true; }
+      catch (e) { c.KV_RW = false; c.KV_ERR = e.message; }
+      return new Response(JSON.stringify(c, null, 2), { headers: { "Content-Type": "application/json" } });
+    }
+
     if (u.searchParams.get("register") === "1") return registerCmds(env);
     if (request.method !== "POST") return new Response("Alerts Bot");
-    const buf = await request.arrayBuffer();
-    const txt = new TextDecoder().decode(buf);
-    if (!(await verify(request, buf, env))) return new Response("Invalid", { status: 401 });
-    return route(JSON.parse(txt), env);
+
+    try {
+      const buf = await request.arrayBuffer();
+      const txt = new TextDecoder().decode(buf);
+      if (!(await verify(request, buf, env))) return new Response("Invalid", { status: 401 });
+      return await route(JSON.parse(txt), env);
+    } catch (e) {
+      console.error("ERR:", e.message);
+      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+    }
   },
 
   async scheduled(_, env) {
@@ -59,17 +80,28 @@ async function verify(req, buf, env) {
 function h2b(h) { const b = new Uint8Array(h.length / 2); for (let i = 0; i < h.length; i += 2) b[i / 2] = parseInt(h.substring(i, i + 2), 16); return b; }
 
 /* ═══════════════════════════════════════════════════════════ */
-async function route(i, env) {
-  if (i.type === 1) return Response.json({ type: 1 });
-  const uid = i.member?.user?.id || i.user?.id;
-  if (uid) await regUser(env, uid);
-  const w = wURL(i.application_id, i.token);
-  if (i.type === 2) return onCmd(i, env);
-  if (i.type === 3) return onBtn(i, env, w);
-  if (i.type === 5) return onModal(i, env, w);
-  return new Response(null, { status: 204 });
-}
 
+async function route(i, env) {
+  try {
+    if (i.type === 1) return Response.json({ type: 1 });
+    const uid = i.member?.user?.id || i.user?.id;
+    if (uid) await regUser(env, uid);
+    const w = wURL(i.application_id, i.token);
+    if (i.type === 2) return onCmd(i, env);
+    if (i.type === 3) return onBtn(i, env, w);
+    if (i.type === 5) return onModal(i, env, w);
+    return new Response(null, { status: 204 });
+  } catch (e) {
+    console.error("ROUTE:", e.message);
+    try {
+      await fetch(wURL(i.application_id, i.token), {
+        method: "POST", headers: jH(),
+        body: JSON.stringify({ content: `❌ خطأ: ${e.message}` }),
+      });
+    } catch {}
+    return new Response(null, { status: 500 });
+  }
+}
 /* ═══════════════════ SLASH COMMANDS ═════════════════════════ */
 function onCmd(i, env) {
   const n = i.data.name;
