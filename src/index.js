@@ -30,29 +30,21 @@ function jH() { return { "Content-Type": "application/json" }; }
 function wh(a, t) { return `${API}/webhooks/${a}/${t}`; }
 const ASSET_CHOICES = Object.entries(ASSETS).map(([k, A]) => ({ name: `${A.icon} ${A.ar}`, value: k.toLowerCase() }));
 
-/* ═══════════════════════════════════════════════════════════ */
 export default {
   async fetch(request, env, ctx) {
     const u = new URL(request.url);
-
     if (u.searchParams.get("debug") === "1") {
       const c = { PK: !!env.DISCORD_PUBLIC_KEY, BT: !!env.DISCORD_BOT_TOKEN, AI: !!env.DISCORD_APP_ID, KV: !!env.DISCORD_KV };
       try { await env.DISCORD_KV.put("_t","1"); await env.DISCORD_KV.delete("_t"); c.KV_OK = true; } catch(e) { c.KV_OK = false; c.ERR = e.message; }
       return new Response(JSON.stringify(c,null,2), { headers:{"Content-Type":"application/json"} });
     }
-
     if (u.searchParams.get("alerts") === "1") {
       try {
-        const chs = await getAllChannels(env);
-        const out = [];
-        for (const chId of chs) {
-          const alerts = await getChAlerts(env, chId);
-          out.push({ channel: chId, alerts: alerts.length, items: alerts });
-        }
+        const chs = await getAllChannels(env); const out = [];
+        for (const chId of chs) { const a = await getChAlerts(env, chId); out.push({ channel: chId, alerts: a.length, items: a }); }
         return new Response(JSON.stringify(out,null,2), { headers:{"Content-Type":"application/json"} });
       } catch(e) { return new Response(JSON.stringify({error:e.message}), { headers:{"Content-Type":"application/json"} }); }
     }
-
     if (u.searchParams.get("testalert") === "1") {
       try {
         const chId = u.searchParams.get("ch");
@@ -61,20 +53,16 @@ export default {
         return new Response("✅ تم الإرسال", { headers:{"Content-Type":"text/plain"} });
       } catch(e) { return new Response(`❌ ${e.message}`, { headers:{"Content-Type":"text/plain"} }); }
     }
-
     if (u.searchParams.get("register") === "1") return registerCmds(env);
     if (request.method !== "POST") return new Response("Alerts Bot");
-
     try {
       const buf = await request.arrayBuffer();
       const txt = new TextDecoder().decode(buf);
       if (!(await verify(request, buf, env))) return new Response("Invalid", { status: 401 });
       const i = JSON.parse(txt);
       if (i.type === 1) return Response.json({ type: 1 });
-
       const chId = i.channel_id;
       if (chId) await regChannel(env, chId);
-
       if (i.type === 2) return await onCmd(i, env);
       if (i.type === 3) {
         const d = i.data.custom_id;
@@ -82,10 +70,7 @@ export default {
         if (d.startsWith("al|")) {
           const key = d.split("|")[1], A = ASSETS[key];
           if (!A) return new Response(null, { status: 204 });
-          return Response.json({ type: 9, data: {
-            custom_id: `al|${key}`, title: `تنبيه — ${A.icon} ${A.ar}`,
-            components: [{ type: 1, components: [{ type: 4, custom_id: "price", label: "السعر المستهدف", style: 1, placeholder: "مثال: 95000", required: true, min_length: 1, max_length: 20 }] }]
-          }});
+          return Response.json({ type: 9, data: { custom_id: `al|${key}`, title: `تنبيه — ${A.icon} ${A.ar}`, components: [{ type: 1, components: [{ type: 4, custom_id: "price", label: "السعر المستهدف", style: 1, placeholder: "مثال: 95000", required: true, min_length: 1, max_length: 20 }] }] }});
         }
         ctx.waitUntil(onBtnAsync(i, env, wh(i.application_id, i.token)));
         return Response.json({ type: 6 });
@@ -104,24 +89,17 @@ export default {
     try {
       const data = await fetchAll();
       const channels = await getAllChannels(env);
-      console.log(`Channels with alerts: ${channels.length}`);
-
+      console.log(`Channels: ${channels.length}`);
       for (const chId of channels) {
         const alerts = await getChAlerts(env, chId);
         if (!alerts.length) continue;
-        console.log(`Channel ${chId}: ${alerts.length} alerts`);
-
         const fired = [];
         for (const a of alerts) {
           const cur = data[a.key]?.price;
           if (!cur) continue;
-          const hit = (a.cond === ">" && cur >= a.price) || (a.cond === "<" && cur <= a.price);
-          if (hit) {
-            try {
-              await sendMsg(env, chId, alertEmbed(ASSETS[a.key], a, cur));
-              fired.push(a.id);
-              console.log(`  🔥 ${a.key} hit`);
-            } catch (e) { console.error(`  ❌ ${e.message}`); }
+          if ((a.cond === ">" && cur >= a.price) || (a.cond === "<" && cur <= a.price)) {
+            try { await sendMsg(env, chId, alertEmbed(ASSETS[a.key], a, cur)); fired.push(a.id); console.log(`  🔥 ${a.key}`); }
+            catch (e) { console.error(`  ❌ ${e.message}`); }
           }
         }
         if (fired.length) await setChAlerts(env, chId, alerts.filter(a => !fired.includes(a.id)));
@@ -132,7 +110,6 @@ export default {
   },
 };
 
-/* ═══════════════════ VERIFY ═══════════════════════════════ */
 async function verify(req, buf, env) {
   const sig = req.headers.get("x-signature-ed25519");
   const ts  = req.headers.get("x-signature-timestamp");
@@ -142,26 +119,22 @@ async function verify(req, buf, env) {
 }
 function h2b(h) { const b = new Uint8Array(h.length / 2); for (let i = 0; i < h.length; i += 2) b[i / 2] = parseInt(h.substring(i, i + 2), 16); return b; }
 
-/* ═══════════════════ SLASH COMMANDS ═════════════════════════ */
 async function onCmd(i, env) {
-  const n = i.data.name;
-  const chId = i.channel_id;
-  if (n === "s" || n === "start")
-    return Response.json({ type: 4, data: { content: "📊 **اختر الأصل:**", components: mainKB() } });
+  const n = i.data.name, chId = i.channel_id;
+  if (n === "s" || n === "start") return Response.json({ type: 4, data: { content: "📊 **اختر الأصل:**", components: mainKB() } });
   if (n === "p") return await cmdP(i, env);
   if (n === "a") return await addAlert(i, env, chId);
   if (n === "d") return await delAlert(i, env, chId);
-  if (n === "t")
-    return Response.json({ type: 4, data: { content: "https://discord.com/channels/1364304054356017162/1378444097093636176" } });
+  if (n === "t") return Response.json({ type: 4, data: { content: "https://discord.com/channels/1364304054356017162/1378444097093636176" } });
   if (n === "myalerts") return await myAlerts(i, env, chId);
   return Response.json({ type: 4, data: { content: "❌", flags: 64 } });
 }
 
 async function cmdP(i, env) {
   const opts = i.data.options || [];
-  const rawAsset = opts.find(o => o.name === "asset")?.value;
-  if (rawAsset) {
-    const key = resolveAsset(rawAsset);
+  const raw = opts.find(o => o.name === "asset")?.value;
+  if (raw) {
+    const key = resolveAsset(raw);
     if (!key) return Response.json({ type: 4, data: { content: "❌ أصل غير معروف", flags: 64 } });
     const det = await fetchDetail(key);
     if (!det.price) return Response.json({ type: 4, data: { content: `⚠️ تعذّر جلب سعر ${ASSETS[key].ar}`, flags: 64 } });
@@ -184,28 +157,21 @@ async function addAlert(i, env, chId) {
   const cond = tgt > cur ? ">" : "<";
   const dist = Math.abs((tgt - cur) / cur * 100).toFixed(2);
   const dir = cond === ">" ? "🔼 عند الصعود إلى" : "🔽 عند النزول إلى";
-
   const alerts = await getChAlerts(env, chId);
   alerts.push({ id: Date.now(), key, cond, price: tgt });
   await setChAlerts(env, chId, alerts);
-
-  return Response.json({ type: 4, data: { embeds: [{
-    title: "✅ تنبيه مُضاف", color: 0x00D278,
-    description: `${A.icon} **${A.ar}** — ${dir} **${fmtPrice(tgt)}**\n\nالسعر الحالي: ${fmtPrice(cur)}\nالبُعد عن الهدف: ${dist}%\n\n📢 سيُرسل التنبيه لهذه القناة فور الوصول`,
-    footer: { text: fmtTs() }, timestamp: new Date().toISOString(),
-  }]}});
+  return Response.json({ type: 4, data: { embeds: [{ title: "✅ تنبيه مُضاف", color: 0x00D278, description: `${A.icon} **${A.ar}** — ${dir} **${fmtPrice(tgt)}**\n\nالسعر الحالي: ${fmtPrice(cur)}\nالبُعد: ${dist}%\n\n📢 يُرسل لهذه القناة فور الوصول`, footer: { text: fmtTs() }, timestamp: new Date().toISOString() }]}});
 }
 
 async function delAlert(i, env, chId) {
   const opts = i.data.options || [];
   const rawAsset = opts.find(o => o.name === "asset")?.value;
   const tgt = opts.find(o => o.name === "price")?.value;
-
   if (!rawAsset && tgt === undefined) {
     const alerts = await getChAlerts(env, chId);
     if (!alerts.length) return Response.json({ type: 4, data: { content: "📭 لا توجد تنبيهات في هذه القناة", flags: 64 } });
     await setChAlerts(env, chId, []);
-    return Response.json({ type: 4, data: { content: `🗑️ تم حذف **${alerts.length}** تنبيه من هذه القناة`, flags: 64 } });
+    return Response.json({ type: 4, data: { content: `🗑️ تم حذف **${alerts.length}** تنبيه`, flags: 64 } });
   }
   const key = resolveAsset(rawAsset);
   if (!key) return Response.json({ type: 4, data: { content: "❌ أصل غير معروف", flags: 64 } });
@@ -213,15 +179,15 @@ async function delAlert(i, env, chId) {
   if (tgt === undefined) {
     const before = alerts.length;
     const filtered = alerts.filter(a => a.key !== key);
-    if (before === filtered.length) return Response.json({ type: 4, data: { content: `📭 لا توجد تنبيهات لـ ${ASSETS[key].ar} في هذه القناة`, flags: 64 } });
+    if (before === filtered.length) return Response.json({ type: 4, data: { content: `📭 لا توجد تنبيهات لـ ${ASSETS[key].ar}`, flags: 64 } });
     await setChAlerts(env, chId, filtered);
-    return Response.json({ type: 4, data: { content: `🗑️ تم حذف **${before - filtered.length}** تنبيه ${ASSETS[key].icon} ${ASSETS[key].ar}`, flags: 64 } });
+    return Response.json({ type: 4, data: { content: `🗑️ حذف **${before - filtered.length}** تنبيه ${ASSETS[key].icon} ${ASSETS[key].ar}`, flags: 64 } });
   }
   const before = alerts.length;
   const filtered = alerts.filter(a => !(a.key === key && Math.abs(a.price - tgt) < 0.01));
   if (before === filtered.length) return Response.json({ type: 4, data: { content: "📭 لا يوجد تنبيه مطابق", flags: 64 } });
   await setChAlerts(env, chId, filtered);
-  return Response.json({ type: 4, data: { content: `🗑️ تم حذف تنبيه ${ASSETS[key].icon} ${ASSETS[key].ar} عند ${fmtPrice(tgt)}`, flags: 64 } });
+  return Response.json({ type: 4, data: { content: `🗑️ حذف تنبيه ${ASSETS[key].icon} ${ASSETS[key].ar} عند ${fmtPrice(tgt)}`, flags: 64 } });
 }
 
 async function allPrices(env) {
@@ -234,14 +200,12 @@ async function myAlerts(i, env, chId) {
   const alerts = await getChAlerts(env, chId);
   if (!alerts.length) return Response.json({ type: 4, data: { content: "📭 لا توجد تنبيهات في هذه القناة\n\n`/a btc 95000` لإضافة\n`/d` لحذف الكل", flags: 64 } });
   const rows = alerts.slice(0, 10).map(a => ({ type: 1, components: [{ type: 2, style: 4, label: `🗑️ ${ASSETS[a.key]?.icon||""} ${ASSETS[a.key]?.ar||a.key} ${a.cond===">"?"🔼":"🔽"} ${fmtPrice(a.price)}`, custom_id: `del|${a.id}` }] }));
-  return Response.json({ type: 4, data: { content: `🔔 **تنبيهات هذه القناة (${alerts.length}):**\n\n\`/d\` → حذف الكل\n\`/d btc\` → حذف كل BTC\n\`/d btc 95000\` → حذف محدد`, components: rows, flags: 64 } });
+  return Response.json({ type: 4, data: { content: `🔔 **تنبيهات هذه القناة (${alerts.length}):**\n\n\`/d\` → حذف الكل\n\`/d btc\` → حذف كل BTC`, components: rows, flags: 64 } });
 }
 
-/* ═══════════════════ ASYNC BUTTONS ═══════════════════════ */
 async function onBtnAsync(i, env, w) {
   const d = i.data.custom_id;
-  const H = jH();
-  const chId = i.channel_id;
+  const H = jH(), chId = i.channel_id;
   const patch = (body) => fetch(`${w}/messages/@original`, { method: "PATCH", headers: H, body: JSON.stringify(body) });
   const follow = (body) => fetch(w, { method: "POST", headers: H, body: JSON.stringify(body) });
   try {
@@ -271,10 +235,7 @@ async function onBtnAsync(i, env, w) {
       await sendChartMsg(w, key);
       return;
     }
-    if (d.startsWith("rc|")) {
-      await sendChartMsg(w, d.split("|")[1]);
-      return;
-    }
+    if (d.startsWith("rc|")) { await sendChartMsg(w, d.split("|")[1]); return; }
     if (d.startsWith("delmsg|")) {
       const msgId = d.split("|")[1];
       if (chId) await fetch(`${API}/channels/${chId}/messages/${msgId}`, { method: "DELETE", headers: botH(env) }).catch(() => {});
@@ -293,13 +254,12 @@ async function onBtnAsync(i, env, w) {
   }
 }
 
-/* ═══════════════════ CHART ════════════════════════════════ */
 async function sendChartMsg(w, key) {
   const A = ASSETS[key];
   if (!A) return;
   const now = Date.now();
-  const candleResp = await fetch(HL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: A.sym, interval: "15m", startTime: now - 86400000, endTime: now } }) });
-  const candles = await candleResp.json();
+  const cr = await fetch(HL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: A.sym, interval: "15m", startTime: now - 86400000, endTime: now } }) });
+  const candles = await cr.json();
   if (!Array.isArray(candles) || !candles.length) { await fetch(w, { method: "POST", headers: jH(), body: JSON.stringify({ content: `⚠️ لا توجد بيانات لرسم ${A.ar}`, flags: 64 }) }); return; }
   const prices = candles.map(c => parseFloat(c.c)), highs = candles.map(c => parseFloat(c.h)), lows = candles.map(c => parseFloat(c.l));
   const minP = Math.min(...lows), maxP = Math.max(...highs), firstP = prices[0], lastP = prices[prices.length - 1];
@@ -316,7 +276,6 @@ async function sendChartMsg(w, key) {
     imgBuf = await r.arrayBuffer();
     if (imgBuf.byteLength < 1000) throw new Error("صغيرة جداً");
   } catch (e) { console.error("QC:", e.message); await fetch(w, { method: "POST", headers: jH(), body: JSON.stringify({ content: `⚠️ تعذّر إنشاء رسم ${A.ar}`, flags: 64 }) }); return; }
-
   const boundary = "----C" + Date.now();
   const pj = JSON.stringify({ embeds: [{ title: `${A.icon} ${A.ar} — آخر 24 ساعة`, color: up ? 0x00D278 : 0xFF466E, image: { url: "attachment://chart.png" }, fields: [ { name: "السعر الآن", value: `**${fmtPrice(lastP)}** ${fmtChg(chg)}`, inline: true }, { name: "الأعلى", value: fmtPrice(maxP), inline: true }, { name: "الأدنى", value: fmtPrice(minP), inline: true } ], footer: { text: "شموع 15 دقيقة · Hyperliquid" }, timestamp: new Date().toISOString() }] });
   const enc = new TextEncoder();
@@ -331,7 +290,6 @@ async function sendChartMsg(w, key) {
   body.set(p3, off); off += p3.length;
   body.set(new Uint8Array(imgBuf), off); off += imgBuf.byteLength;
   body.set(p4, off);
-
   let msgId;
   try {
     const resp = await fetch(w, { method: "POST", headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` }, body });
@@ -341,7 +299,6 @@ async function sendChartMsg(w, key) {
   if (msgId) { try { await fetch(`${w}/messages/${msgId}`, { method: "PATCH", headers: jH(), body: JSON.stringify({ components: [{ type: 1, components: [{ type: 2, style: 2, label: "🔄 تحديث", custom_id: `rc|${key}` }, { type: 2, style: 4, label: "🗑️ حذف", custom_id: `delmsg|${msgId}` }] }] }) }); } catch(e) { console.error("BTN:", e.message); }
 }
 
-/* ═══════════════════ MODAL ═══════════════════════════════ */
 async function onModal(i, env) {
   const d = i.data.custom_id, chId = i.channel_id;
   if (!d.startsWith("al|")) return new Response(null, { status: 204 });
@@ -359,10 +316,9 @@ async function onModal(i, env) {
   const alerts = await getChAlerts(env, chId);
   alerts.push({ id: Date.now(), key, cond, price: tgt });
   await setChAlerts(env, chId, alerts);
-  return Response.json({ type: 4, data: { embeds: [{ title: "✅ تنبيه مُضاف", color: 0x00D278, description: `${A.icon} **${A.ar}** — ${dir} **${fmtPrice(tgt)}**\n\nالسعر الحالي: ${fmtPrice(cur)}\nالبُعد عن الهدف: ${dist}%\n\n📢 سيُرسل لهذه القناة فور الوصول`, footer: { text: fmtTs() }, timestamp: new Date().toISOString() }]}});
+  return Response.json({ type: 4, data: { embeds: [{ title: "✅ تنبيه مُضاف", color: 0x00D278, description: `${A.icon} **${A.ar}** — ${dir} **${fmtPrice(tgt)}**\n\nالسعر الحالي: ${fmtPrice(cur)}\nالبُعد: ${dist}%\n\n📢 سيُرسل لهذه القناة فور الوصول`, footer: { text: fmtTs() }, timestamp: new Date().toISOString() }]}});
 }
 
-/* ═══════════════════ UI ══════════════════════════════════ */
 function mainKB() {
   return [
     { type: 1, components: [ { type: 2, style: 2, label: "₿ BTC", custom_id: "p|BTC" }, { type: 2, style: 2, label: "🔷 ETH", custom_id: "p|ETH" }, { type: 2, style: 2, label: "🟣 SOL", custom_id: "p|SOL" } ]},
@@ -373,7 +329,6 @@ function mainKB() {
 }
 function detailKB(k) { return [ { type: 1, components: [ { type: 2, style: 2, label: "🔄 تحديث", custom_id: `rpa|${k}` }, { type: 2, style: 2, label: "📊 رسم بياني", custom_id: `c|${k}` }, { type: 2, style: 3, label: "🔔 تنبيه", custom_id: `al|${k}` } ]}, { type: 1, components: [{ type: 2, style: 2, label: "◀️ رجوع", custom_id: "back" }] } ]; }
 
-/* ═══════════════════ EMBEDS ════════════════════════════════ */
 function priceEmbed(key, d) {
   const A = ASSETS[key], up = (d.chg24 ?? 0) >= 0;
   const rng = (d.high != null && d.low != null) ? (d.high - d.low) : null;
@@ -384,14 +339,12 @@ function alertEmbed(A, a, cur) {
   return { title: "🔔 تنبيه سعري", color: 0xF59E0B, description: `${A.icon} **${A.ar}** — ${a.cond === ">" ? "🔼 وصل الهدف الأعلى" : "🔽 وصل الهدف الأدنى"}\n\nالسعر الآن: **${fmtPrice(cur)}**\nالهدف كان: **${fmtPrice(a.price)}**`, footer: { text: fmtTs() }, timestamp: new Date().toISOString() };
 }
 
-/* ═══════════════════ SEND TO CHANNEL ════════════════════ */
 async function sendMsg(env, chId, embed) {
   const h = botH(env);
   const r = await fetch(`${API}/channels/${chId}/messages`, { method: "POST", headers: h, body: JSON.stringify({ embeds: [embed] }) });
   if (!r.ok) { const err = await r.text(); throw new Error(`${r.status} ${err}`); }
 }
 
-/* ═══════════════════ REGISTER ════════════════════════════ */
 async function registerCmds(env) {
   const h = botH(env);
   const cmds = [
@@ -407,7 +360,6 @@ async function registerCmds(env) {
   return new Response(JSON.stringify(await r.json(), null, 2), { headers:{"Content-Type":"application/json"} });
 }
 
-/* ═══════════════════ DATA ════════════════════════════════ */
 async function fetchAll() {
   const out = {};
   await Promise.all(Object.entries(ASSETS).map(async ([k, A]) => {
@@ -446,13 +398,11 @@ async function fetchDetail(key) {
   return { price, chg24, chg7, chg30, high, low };
 }
 
-/* ═══════════════════ KV — لكل قناة ══════════════════════ */
 async function getChAlerts(env, chId) { try { const r = await env.DISCORD_KV.get(`ch:${chId}`); return r ? JSON.parse(r) : []; } catch { return []; } }
 async function setChAlerts(env, chId, l) { await env.DISCORD_KV.put(`ch:${chId}`, JSON.stringify(l)); }
 async function getAllChannels(env) { try { const r = await env.DISCORD_KV.get("channels"); return r ? JSON.parse(r) : []; } catch { return []; } }
 async function regChannel(env, chId) { const chs = await getAllChannels(env); if (!chs.includes(chId)) { chs.push(chId); await env.DISCORD_KV.put("channels", JSON.stringify(chs)); } }
 
-/* ═══════════════════ FORMAT ══════════════════════════════ */
 function fmtPrice(v) { if (!v) return "—"; if (v >= 1000) return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); if (v >= 100) return "$" + v.toFixed(2); if (v >= 1) return "$" + v.toFixed(3); return "$" + v.toFixed(5); }
 function fmtChg(c) { if (c == null) return "—"; return `${c >= 0 ? "🟢" : "🔴"} ${c >= 0 ? "+" : ""}${c.toFixed(2)}%`; }
 function fmtTs() { const d = new Date(Date.now() + 10800000); const dd = String(d.getUTCDate()).padStart(2,"0"); const mm = String(d.getUTCMonth() + 1).padStart(2,"0"); const yyyy = d.getUTCFullYear(); let hh = d.getUTCHours(); const min = String(d.getUTCMinutes()).padStart(2,"0"); const ss = String(d.getUTCSeconds()).padStart(2,"0"); const ap = hh >= 12 ? "م" : "ص"; hh = hh % 12 || 12; return `${dd}/${mm}/${yyyy}، ${String(hh).padStart(2,"0")}:${min}:${ss} ${ap}`; }
