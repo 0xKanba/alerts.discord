@@ -1,0 +1,10 @@
+name = "alerts_discord"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "DISCORD_KV"
+id = "955673db2faa466dbb94224dddd887b9"
+
+[triggers]
+crons = ["*/1 * * * *"]
