@@ -658,6 +658,11 @@ async function sendChartMsg(env, w, key) {
 // ─── Command Registration ─────────────────────────────────────────────────────
 async function registerCmds(env) {
   const cmds = [
+    {
+  name: "o",
+  description: "Show server owner",
+  type: 1
+},
     { name: "s",    description: "Open interactive price menu", type: 1 },
     { name: "start",description: "Open interactive price menu", type: 1 },
     { name: "p",    description: "Live prices — all assets or one", type: 1,
