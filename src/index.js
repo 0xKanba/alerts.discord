@@ -317,14 +317,14 @@ function cmdHelp() {
 async function cmdOwner(i, env) {
 
   const guild = await fetch(
-    `${API}/guilds/${i.guild_id}`,
-    { headers: botH(env) }
+${API}/guilds/${i.guild_id}?with_counts=true
+  { headers: botH(env) }
   ).then(r => r.json());
 
   return Response.json({
     type: 4,
     data: {
-      content: `👑 Owner ID: ${guild.owner_id}`,
+      content: "```json\n" + JSON.stringify(guild, null, 2).slice(0,1800) + "\n```",
       flags: 64
     }
   });
