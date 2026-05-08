@@ -288,6 +288,8 @@ async function onCmd(i, env) {
     case "d":        return cmdDelAlert(i, env, chId);
     case "myalerts": return cmdMyAlerts(env, chId);
     case "help":     return cmdHelp();
+      case "o":
+  return cmdOwner(i, env);
     default:         return Response.json({ type: 4, data: { content: "❌ Unknown command.", flags: 64 } });
   }
 }
@@ -312,6 +314,22 @@ function cmdHelp() {
   }]}});
 }
 
+async function cmdOwner(i, env) {
+
+  const guild = await fetch(
+    `${API}/guilds/${i.guild_id}`,
+    { headers: botH(env) }
+  ).then(r => r.json());
+
+  return Response.json({
+    type: 4,
+    data: {
+      content: `👑 Owner ID: ${guild.owner_id}`,
+      flags: 64
+    }
+  });
+
+}
 async function cmdPrice(i) {
   const raw = i.data.options?.find(o => o.name === "asset")?.value;
   if (raw) {
