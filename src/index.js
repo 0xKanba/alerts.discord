@@ -317,8 +317,8 @@ function cmdHelp() {
 async function cmdOwner(i, env) {
 
   const guild = await fetch(
-${API}/guilds/${i.guild_id}?with_counts=true
-  { headers: botH(env) }
+    `${API}/guilds/${i.guild_id}`,
+    { headers: botH(env) }
   ).then(r => r.json());
 
   return Response.json({
