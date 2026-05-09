@@ -73,15 +73,13 @@ function fmtChg(c) {
   return `${c >= 0 ? "🟢" : "🔴"} ${c >= 0 ? "+" : ""}${c.toFixed(2)}%`;
 }
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function fmtTs() {
-  const now  = Date.now();
-  const d    = new Date(now);
-  const p    = n => String(n).padStart(2, "0");
-  const date = `${p(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-  const time = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
-  const unix = Math.floor(now / 1000);
-  return `${date}, ${time} UTC · <t:${unix}:f>`;
+function fmtDate() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
+// Discord embed `timestamp` field renders local time automatically in footer — no need to repeat it here
+function fmtTs() { return fmtDate(); }
 
 // ─── Ed25519 Signature Verification ──────────────────────────────────────────
 function h2b(hex) {
