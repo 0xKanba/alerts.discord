@@ -68,9 +68,14 @@ function fmtPrice(v) {
   if (v >= 1)    return "$" + v.toFixed(3);
   return "$" + v.toFixed(5);
 }
-function fmtChg(c) {
-  if (c == null || isNaN(c)) return "—";
-  return `${c >= 0 ? "🟢" : "🔴"} ${c >= 0 ? "+" : ""}${c.toFixed(2)}%`;
+function fmtChg(pct, price) {
+  if (pct == null || isNaN(pct)) return "—";
+  const sign  = pct >= 0 ? "+" : "";
+  const icon  = pct >= 0 ? "🟢" : "🔴";
+  const dollar = (price != null && !isNaN(price))
+    ? ` (${sign}${fmtPrice(Math.abs(price * pct / 100)).replace("$", "")}$)`
+    : "";
+  return `${icon} ${sign}${pct.toFixed(2)}%${dollar}`;
 }
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function fmtDate() {
@@ -196,9 +201,9 @@ function priceEmbed(key, d) {
     color: up ? 0x00D278 : 0xFF466E,
     fields: [
       { name:"💰 Price",      value:fmtPrice(d.price), inline:true },
-      { name:"📅 24h Change", value:fmtChg(d.chg24),  inline:true },
-      { name:"📅 7d Change",  value:fmtChg(d.chg7),   inline:true },
-      { name:"📅 30d Change", value:fmtChg(d.chg30),  inline:true },
+      { name:"📅 24h Change", value:fmtChg(d.chg24, d.price),  inline:true },
+      { name:"📅 7d Change",  value:fmtChg(d.chg7,  d.price),  inline:true },
+      { name:"📅 30d Change", value:fmtChg(d.chg30, d.price),  inline:true },
       { name:"↑ 24h High",   value:fmtPrice(d.high),  inline:true },
       { name:"↓ 24h Low",    value:fmtPrice(d.low),   inline:true },
       ...(rng && rngPct ? [{ name:"↔ Range", value:`${fmtPrice(rng)} (${rngPct}%)`, inline:true }] : []),
@@ -214,7 +219,7 @@ function summaryEmbed(data) {
     color:     0x00D278,
     fields:    Object.entries(ASSETS).map(([k, A]) => {
       const d = data[k];
-      return { name:`${A.icon} ${A.name}`, value:d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg24)}` : "⚠️ N/A", inline:true };
+      return { name:`${A.icon} ${A.name}`, value:d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg24, d.price)}` : "⚠️ N/A", inline:true };
     }),
     footer:    { text:`Hyperliquid · ${fmtTs()}` },
     timestamp: new Date().toISOString(),
@@ -589,7 +594,7 @@ async function sendChartMsg(env, w, key, editTarget, chId) {
       title:`${A.icon} ${A.name} — Last 24h`, color: up ? 0x00D278 : 0xFF466E,
       image:{ url:"attachment://chart.png" },
       fields:[
-        { name:"Price",    value:`**${fmtPrice(lastP)}** ${fmtChg(chg)}`, inline:true },
+        { name:"Price",    value:`**${fmtPrice(lastP)}** ${fmtChg(chg, lastP)}`, inline:true },
         { name:"24h High", value:fmtPrice(maxP), inline:true },
         { name:"24h Low",  value:fmtPrice(minP), inline:true },
       ],
