@@ -30,23 +30,24 @@ const ASSETS = {
 };
 
 // All accepted aliases → canonical key
+// Primary aliases (3 per asset) + extras kept for convenience
 const ALIAS = {
-  // BTC
-  btc:"BTC", bitcoin:"BTC",
-  // ETH
-  eth:"ETH", ethereum:"ETH",
-  // SOL
-  sol:"SOL", solana:"SOL",
-  // GOLD
+  // BTC — btc · bitcoin · xbt
+  btc:"BTC", bitcoin:"BTC", xbt:"BTC",
+  // ETH — eth · ethereum · ether
+  eth:"ETH", ethereum:"ETH", ether:"ETH",
+  // SOL — sol · solana · slna
+  sol:"SOL", solana:"SOL", slna:"SOL",
+  // GOLD — gold · xau · gc
   gold:"GOLD", xau:"GOLD", gc:"GOLD",
-  // SILVER
+  // SILVER — silver · xag · si
   silver:"SILVER", xag:"SILVER", si:"SILVER",
-  // OIL
-  oil:"OIL", cl:"OIL", wti:"OIL", crude:"OIL",
-  // NASDAQ
-  us100:"US100", nasdaq:"US100", nq:"US100", nasdaq100:"US100",
-  // S&P 500
-  sp500:"SP500", es:"SP500", us500:"SP500", "s&p":"SP500", "s&p500":"SP500", sp:"SP500",
+  // OIL — oil · wti · cl
+  oil:"OIL", wti:"OIL", cl:"OIL", crude:"OIL",
+  // NASDAQ 100 — nq · nasdaq · us100
+  nq:"US100", nasdaq:"US100", us100:"US100", nasdaq100:"US100",
+  // S&P 500 — es · sp500 · spx
+  es:"SP500", sp500:"SP500", spx:"SP500", us500:"SP500", "s&p":"SP500", sp:"SP500",
 };
 
 // ─── Small Helpers ────────────────────────────────────────────────────────────
@@ -446,13 +447,13 @@ async function onBtnAsync(i, env, w) {
       return;
     }
     if (d.startsWith("c|")) {
-      const key = d.split("|")[1];
-      await patch({ content:`⏳ Generating chart for **${ASSETS[key]?.name}**…`, embeds:[], components:[] });
-      await sendChartMsg(env, w, key);
+      // Send chart as new followup — original price embed stays untouched
+      await sendChartMsg(env, w, d.split("|")[1], null, null);
       return;
     }
     if (d.startsWith("rc|")) {
-      await sendChartMsg(env, w, d.split("|")[1]);
+      // Edit the chart message in-place via PATCH @original
+      await sendChartMsg(env, w, d.split("|")[1], "@original", null);
       return;
     }
     if (d.startsWith("delmsg|")) {
@@ -511,7 +512,13 @@ async function onModal(i, env) {
 }
 
 // ─── Chart ────────────────────────────────────────────────────────────────────
-async function sendChartMsg(env, w, key) {
+/**
+ * sendChartMsg(env, w, key, editTarget, chId)
+ *
+ * editTarget = null        → POST new followup message (initial chart)
+ * editTarget = "@original" → PATCH @original via webhook (refresh button hit on chart message)
+ */
+async function sendChartMsg(env, w, key, editTarget, chId) {
   const A = ASSETS[key];
   if (!A) return;
   const now = Date.now();
@@ -521,7 +528,8 @@ async function sendChartMsg(env, w, key) {
     candles = await r.json();
     if (!Array.isArray(candles) || !candles.length) throw new Error("empty");
   } catch {
-    await fetch(w, { method:"POST", headers:jH(), body:JSON.stringify({ content:`⚠️ No chart data for **${A.name}**.`, flags:64 }) });
+    const errBody = JSON.stringify({ content:`⚠️ No chart data for **${A.name}**.`, flags:64 });
+    await fetch(editTarget ? `${w}/messages/${editTarget}` : w, { method: editTarget ? "PATCH" : "POST", headers:jH(), body:errBody });
     return;
   }
 
@@ -543,8 +551,8 @@ async function sendChartMsg(env, w, key) {
   const chartCfg = {
     type:"line",
     data:{ labels:dL, datasets:[{ data:dP,
-      borderColor:     up ? "rgb(0,210,120)"        : "rgb(255,70,110)",
-      backgroundColor: up ? "rgba(0,210,120,0.12)"  : "rgba(255,70,110,0.12)",
+      borderColor:     up ? "rgb(0,210,120)"       : "rgb(255,70,110)",
+      backgroundColor: up ? "rgba(0,210,120,0.12)" : "rgba(255,70,110,0.12)",
       borderWidth:2, pointRadius:0, fill:true, tension:0.3,
     }]},
     options:{
@@ -568,22 +576,33 @@ async function sendChartMsg(env, w, key) {
     if (imgBuf.byteLength < 1000) throw new Error("Invalid image");
   } catch(e) {
     console.error("QC:", e.message);
-    await fetch(w, { method:"POST", headers:jH(), body:JSON.stringify({ content:`⚠️ Chart failed for **${A.name}**.`, flags:64 }) });
+    const errBody = JSON.stringify({ content:`⚠️ Chart failed for **${A.name}**.`, flags:64 });
+    await fetch(editTarget ? `${w}/messages/${editTarget}` : w, { method: editTarget ? "PATCH" : "POST", headers:jH(), body:errBody });
     return;
   }
 
+  // Build multipart body
+  // When editing (refresh): include "attachments":[] to clear old image so new one replaces it
   const boundary = "----W" + Date.now();
-  const payload  = JSON.stringify({ embeds:[{
-    title:`${A.icon} ${A.name} — Last 24h`, color: up ? 0x00D278 : 0xFF466E,
-    image:{ url:"attachment://chart.png" },
-    fields:[
-      { name:"Price",    value:`**${fmtPrice(lastP)}** ${fmtChg(chg)}`, inline:true },
-      { name:"24h High", value:fmtPrice(maxP), inline:true },
-      { name:"24h Low",  value:fmtPrice(minP), inline:true },
-    ],
-    footer:{ text:"15m Candles · Hyperliquid" },
-    timestamp: new Date().toISOString(),
-  }]});
+  const embedPayload = {
+    embeds:[{
+      title:`${A.icon} ${A.name} — Last 24h`, color: up ? 0x00D278 : 0xFF466E,
+      image:{ url:"attachment://chart.png" },
+      fields:[
+        { name:"Price",    value:`**${fmtPrice(lastP)}** ${fmtChg(chg)}`, inline:true },
+        { name:"24h High", value:fmtPrice(maxP), inline:true },
+        { name:"24h Low",  value:fmtPrice(minP), inline:true },
+      ],
+      footer:{ text:`15m Candles · Hyperliquid · ${fmtTs()}` },
+      timestamp: new Date().toISOString(),
+    }],
+    components:[{ type:1, components:[
+      { type:2, style:2, label:"🔄 Refresh", custom_id:`rc|${key}` },
+    ]}],
+    // Clear old attachments when editing so new image replaces them
+    ...(editTarget ? { attachments:[] } : {}),
+  };
+  const payload = JSON.stringify(embedPayload);
 
   const enc = new TextEncoder();
   const p1  = enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n`);
@@ -598,25 +617,13 @@ async function sendChartMsg(env, w, key) {
   body.set(new Uint8Array(imgBuf),off); off+=imgBuf.byteLength;
   body.set(p4,off);
 
-  let msgId;
+  const url    = editTarget ? `${w}/messages/${editTarget}` : w;
+  const method = editTarget ? "PATCH" : "POST";
   try {
-    const resp = await fetch(w, { method:"POST", headers:{ "Content-Type":`multipart/form-data; boundary=${boundary}` }, body });
-    if (!resp.ok) throw new Error(`send ${resp.status}`);
-    msgId = (await resp.json()).id;
+    const resp = await fetch(url, { method, headers:{ "Content-Type":`multipart/form-data; boundary=${boundary}` }, body });
+    if (!resp.ok) throw new Error(`${method} ${resp.status}: ${await resp.text()}`);
   } catch(e) {
     console.error("CHART_SEND:", e.message);
-    await fetch(w, { method:"POST", headers:jH(), body:JSON.stringify({ content:`⚠️ Failed to send chart.`, flags:64 }) });
-    return;
-  }
-
-  if (msgId) {
-    await fetch(`${w}/messages/${msgId}`, {
-      method:"PATCH", headers:jH(),
-      body:JSON.stringify({ components:[{ type:1, components:[
-        { type:2, style:2, label:"🔄 Refresh", custom_id:`rc|${key}` },
-        { type:2, style:4, label:"🗑️ Delete",  custom_id:`delmsg|${msgId}` },
-      ]}]}),
-    }).catch(()=>{});
   }
 }
 
