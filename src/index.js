@@ -208,7 +208,7 @@ function priceEmbed(key, d) {
       { name:"↓ 24h Low",    value:fmtPrice(d.low),   inline:true },
       ...(rng && rngPct ? [{ name:"↔ Range", value:`${fmtPrice(rng)} (${rngPct}%)`, inline:true }] : []),
     ],
-    footer:    { text:`Hyperliquid · ${fmtTs()}` },
+    footer:    { text:`Hyperliquid · Last 24H · ${fmtTs()}` },
     timestamp: new Date().toISOString(),
   };
 }
@@ -221,7 +221,7 @@ function summaryEmbed(data) {
       const d = data[k];
       return { name:`${A.icon} ${A.name}`, value:d ? `**${fmtPrice(d.price)}** ${fmtChg(d.chg24, d.price)}` : "⚠️ N/A", inline:true };
     }),
-    footer:    { text:`Hyperliquid · ${fmtTs()}` },
+    footer:    { text:`Hyperliquid · Last 24H · ${fmtTs()}` },
     timestamp: new Date().toISOString(),
   };
 }
@@ -231,7 +231,7 @@ function alertFiredEmbed(A, a, cur) {
     title:       "🔔 Price Alert Triggered",
     color:       0xF59E0B,
     description: `${A.icon} **${A.name}** — ${a.cond===">" ? "🔼 Reached upper target" : "🔽 Reached lower target"}\n\nCurrent: **${fmtPrice(cur)}**\nTarget:  **${fmtPrice(a.price)}**`,
-    footer:      { text:fmtTs() },
+    footer:      { text:`Alert fired · ${fmtTs()}` },
     timestamp:   new Date().toISOString(),
   };
 }
@@ -302,7 +302,7 @@ function cmdHelp() {
       { name:"`/d <asset> <price>`",  value:"Remove one specific alert  →  `/d btc 90000`",                              inline:false },
       { name:"`/myalerts`",           value:"List active alerts in this channel",                                        inline:false },
     ],
-    footer:    { text:"Alerts fire within 60 s · Auto-removed after triggering" },
+    footer:    { text:`Alerts fire within 60s · Auto-removed after triggering · ${fmtTs()}` },
     timestamp: new Date().toISOString(),
   }]}});
 }
@@ -354,7 +354,7 @@ async function cmdAddAlert(i, env, chId) {
     title:       "✅ Alert Added",
     color:       0x00D278,
     description: `${A.icon} **${A.name}** — ${dir} **${fmtPrice(tgt)}**\n\nCurrent:  ${fmtPrice(cur)}\nDistance: ${dist}%\n\n📢 Will fire in this channel.`,
-    footer:      { text:fmtTs() },
+    footer:      { text:`Alert fired · ${fmtTs()}` },
     timestamp:   new Date().toISOString(),
   }]}});
 }
@@ -511,7 +511,7 @@ async function onModal(i, env) {
     title:       "✅ Alert Added",
     color:       0x00D278,
     description: `${A.icon} **${A.name}** — ${dir} **${fmtPrice(tgt)}**\n\nCurrent:  ${fmtPrice(cur)}\nDistance: ${dist}%\n\n📢 Will fire in this channel.`,
-    footer:      { text:fmtTs() },
+    footer:      { text:`Alert fired · ${fmtTs()}` },
     timestamp:   new Date().toISOString(),
   }]}});
 }
@@ -598,7 +598,7 @@ async function sendChartMsg(env, w, key, editTarget, chId) {
         { name:"24h High", value:fmtPrice(maxP), inline:true },
         { name:"24h Low",  value:fmtPrice(minP), inline:true },
       ],
-      footer:{ text:`15m Candles · Hyperliquid · ${fmtTs()}` },
+      footer:{ text:`15m Candles · Last 24H · ${fmtTs()}` },
       timestamp: new Date().toISOString(),
     }],
     components:[{ type:1, components:[
