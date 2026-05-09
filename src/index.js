@@ -72,13 +72,15 @@ function fmtChg(c) {
   if (c == null || isNaN(c)) return "—";
   return `${c >= 0 ? "🟢" : "🔴"} ${c >= 0 ? "+" : ""}${c.toFixed(2)}%`;
 }
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function fmtTs() {
-  const d  = new Date(Date.now() + 10800000); // UTC+3
-  const p  = n => String(n).padStart(2, "0");
-  let h    = d.getUTCHours();
-  const ap = h >= 12 ? "PM" : "AM";
-  h = h % 12 || 12;
-  return `${p(d.getUTCDate())}/${p(d.getUTCMonth()+1)}/${d.getUTCFullYear()}, ${p(h)}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} ${ap} (UTC+3)`;
+  const now  = Date.now();
+  const d    = new Date(now);
+  const p    = n => String(n).padStart(2, "0");
+  const date = `${p(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  const time = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  const unix = Math.floor(now / 1000);
+  return `${date}, ${time} UTC · <t:${unix}:f>`;
 }
 
 // ─── Ed25519 Signature Verification ──────────────────────────────────────────
